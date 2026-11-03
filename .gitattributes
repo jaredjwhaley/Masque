@@ -1,0 +1,2 @@
+# Normalize line endings; Windows checkouts get CRLF, the repo stores LF.
+* text=auto

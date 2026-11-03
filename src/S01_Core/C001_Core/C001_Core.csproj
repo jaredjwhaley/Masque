@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- The folder follows the repo layout standard; the shipped assembly keeps a clean name. -->
+    <AssemblyName>Masque.Core</AssemblyName>
+    <RootNamespace>Masque.Core</RootNamespace>
+    <Description>Detection-agnostic tokenizer and vault for de-identifying PII and PHI locally.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Masque.Core.Tests" />
+  </ItemGroup>
+
+</Project>

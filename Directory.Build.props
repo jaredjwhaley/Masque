@@ -1,0 +1,15 @@
+<Project>
+  <!-- Shared settings for every project in the repo. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- XML docs are required on public members: a missing one (CS1591) fails the build. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Authors>Jared Whaley</Authors>
+    <Copyright>Copyright (c) 2026 Jared Whaley</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+</Project>
