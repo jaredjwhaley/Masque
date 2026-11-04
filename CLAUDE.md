@@ -6,6 +6,7 @@ Open-source (MIT) local PII/PHI tokenizer that sits between AI assistants and se
 - **Synthetic data only.** Never put real PII, PHI, secrets or employer data in code, tests, fixtures, docs, commits or issues. Use obviously fake values (`123-45-6789`, `pat@example.com`).
 - **Generic.** No organization, client, vendor, schema or AI-vendor specifics in code. Anything shape-specific belongs in user configs, never in the repo.
 - **Fail closed.** When unsure what a value is, mask it. A change that lets unknown data pass through needs Jared's explicit OK.
+- **Never print or log a data value.** Console output, exception messages and config files hold headers, categories, paths, row numbers and counts only. Third-party exceptions can quote raw data (CsvHelper's include the whole row): catch them, rethrow a safe message, attach no inner exception. Every new command gets a test asserting its output has no values.
 - Tokens must never be valid real-world values (900-range SSNs, `.invalid` email, 0xx area codes). Keep that property in any new rule and test it.
 
 ## Standards

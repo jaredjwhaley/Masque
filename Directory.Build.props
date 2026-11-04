@@ -8,6 +8,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <!-- XML docs are required on public members: a missing one (CS1591) fails the build. -->
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Version>0.1.0</Version>
     <Authors>Jared Whaley</Authors>
     <Copyright>Copyright (c) 2026 Jared Whaley</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

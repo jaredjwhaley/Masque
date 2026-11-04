@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>Masque.Csv</AssemblyName>
+    <RootNamespace>Masque.Csv</RootNamespace>
+    <Description>CSV adapter for Masque: samples a file for detection and writes a masked copy in the same format.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CsvHelper" Version="33.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\S01_Core\C001_Core\C001_Core.csproj" />
+  </ItemGroup>
+
+</Project>

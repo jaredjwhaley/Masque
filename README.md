@@ -2,9 +2,50 @@
 
 Masque is a local layer between an AI assistant and sensitive data. It replaces PII (personally identifiable information) and PHI (protected health information) with consistent fake values before the assistant sees them. The same real value always becomes the same fake one, so joins, counts and "is this the same person?" still work. Real values never leave your machine.
 
-> **Status:** early. The tokenizer, its rules and the encrypted vault are built and tested. File, SQL and assistant integration come next (see [Roadmap](#roadmap)).
+> **Status:** early (0.1.0). The `masque` command masks CSV files end to end on Windows. Excel, SQL and assistant integration come next (see [Roadmap](#roadmap)).
 
 > **Not a compliance certification.** Masque lowers the risk of exposing data; it does not by itself make data "de-identified" under HIPAA or any other law. Detection of free text is best-effort. Before you use it on real data, confirm with your compliance team that your organization allows tokenized data to reach your AI vendor.
+
+## Usage
+
+```bash
+masque people.csv
+```
+
+The first time Masque sees a set of columns, it proposes a category for each one, saves the proposal as a config and stops (exit code 2):
+
+```
+Columns in people.csv (shape ab38dfa71c868656, proposed):
+  EmployeeID    Identifier   header "EmployeeID" suggests Identifier
+  First Name    Name         header "First Name" suggests Name
+  SSN           Ssn          header "SSN" suggests Ssn
+  GrossPay      Money        header "GrossPay" suggests Money
+  Notes         FreeText     no header or value pattern matched; masked as free text
+```
+
+Edit any category in the config file it names, then confirm:
+
+```bash
+masque people.csv --accept
+```
+
+It writes `people.masque.csv`. Files with the same columns run without stopping from then on. Masque never prints a data value, only headers, categories, paths and counts, so its output is safe for an AI assistant to read.
+
+| Option | Default |
+| --- | --- |
+| `--out <path>` | `<file>.masque.csv` |
+| `--accept` | Confirm a proposed config |
+| `--vault <path>` | `%LOCALAPPDATA%\Masque\vault.db` |
+| `--configs <dir>` | `%LOCALAPPDATA%\Masque\configs` |
+
+Exit codes: 0 done, 1 error, 2 review needed, 64 bad arguments.
+
+### Install from source
+
+```bash
+dotnet pack src/S03_Tools/C004_Cli -o nupkg
+dotnet tool install --global Masque --add-source nupkg
+```
 
 ## How it works
 
@@ -59,8 +100,12 @@ dotnet test Masque.slnx
 ```
 src/S01_Core/C001_Core/              Masque.Core: categories, rules, tokenizer, vault contract, in-memory vault
 src/S01_Core/C002_Vault/             Masque.Vault: encrypted SQLite vault, OS key protection
+src/S02_Adapters/C003_Csv/           Masque.Csv: CSV sampling and masked copies (CsvHelper)
+src/S03_Tools/C004_Cli/              Masque.Cli: the `masque` command (packs as a dotnet tool)
 tests/S01_Core/C001_Core.Tests/      xUnit v3 + Shouldly tests for Masque.Core (incl. the shared vault contract)
 tests/S01_Core/C002_Vault.Tests/     Tests for Masque.Vault
+tests/S02_Adapters/C003_Csv.Tests/   Tests for Masque.Csv
+tests/S03_Tools/C004_Cli.Tests/      End-to-end tests for the command
 ```
 
 Folders follow `<Area>/SNN_Section/CNNN_Name/`; assemblies keep clean names (`Masque.Core`).
@@ -68,7 +113,7 @@ Folders follow `<Area>/SNN_Section/CNNN_Name/`; assemblies keep clean names (`Ma
 ## Roadmap
 
 1. **Core** (in progress): tokenizer, rules, in-memory vault and encrypted SQLite vault with Windows key protection are done. Next: macOS Keychain and Linux libsecret key protectors, date shifting per person.
-2. **CSV and CLI:** `masque file.csv` writes `file.masque.csv`; header and value detectors; saved configs.
+2. **CSV and CLI** (done): `masque file.csv` writes `file.masque.csv`; header and value detectors; saved configs with a review step. Dates are fully redacted until date shifting lands.
 3. **Excel and SQL:** sheet adapter with header-row detection; SQL result adapter.
 4. **MCP server and hooks:** `read_anonymized`, `query_anonymized`; hooks that block raw reads.
 5. **Free text:** NER, a clipboard command, and a prompt-submit hook.

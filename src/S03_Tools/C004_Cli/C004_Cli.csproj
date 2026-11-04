@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>Masque.Cli</AssemblyName>
+    <RootNamespace>Masque.Cli</RootNamespace>
+    <Description>masque command: de-identifies CSV files locally before an AI assistant sees them.</Description>
+    <!-- Installable with `dotnet tool install`; the command is `masque`. -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>masque</ToolCommandName>
+    <PackageId>Masque</PackageId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Masque.Cli.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\S01_Core\C001_Core\C001_Core.csproj" />
+    <ProjectReference Include="..\..\S01_Core\C002_Vault\C002_Vault.csproj" />
+    <ProjectReference Include="..\..\S02_Adapters\C003_Csv\C003_Csv.csproj" />
+  </ItemGroup>
+
+</Project>

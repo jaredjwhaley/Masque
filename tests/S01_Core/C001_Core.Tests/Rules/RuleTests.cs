@@ -60,6 +60,18 @@ public class RuleTests
     }
 
     [Fact]
+    public void Name_SingleWordValue_GetsASingleWordToken()
+    {
+        new NameRule().CreateToken("ZEBULON", _random, attempt: 0).ShouldMatch(@"^[A-Z][a-z]+$");
+    }
+
+    [Fact]
+    public void Name_SingleWordLaterAttempts_AddANumber()
+    {
+        new NameRule().CreateToken("ZEBULON", _random, attempt: 50).ShouldMatch(@"^[A-Z][a-z]+ \d{1,4}$");
+    }
+
+    [Fact]
     public void Name_LaterAttempts_AddANumberToWidenTheTokenSpace()
     {
         new NameRule().CreateToken("PAT SMITH", _random, attempt: 50).ShouldMatch(@"^[A-Z][a-z]+ [A-Z][a-z]+ \d{1,4}$");

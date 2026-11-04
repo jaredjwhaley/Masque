@@ -1,8 +1,9 @@
 namespace Masque.Core.Rules;
 
 /// <summary>
-/// Names become a made-up "First Last" pair, so de-identified output still reads naturally.
-/// After repeated collisions a number is added (for example "Avery Brooks 412") to widen the token space.
+/// Names become made-up names of the same shape: a full name becomes "First Last", a single word becomes one
+/// made-up word, so de-identified output still reads naturally. After repeated collisions a number is added
+/// (for example "Avery Brooks 412") to widen the token space.
 /// </summary>
 public sealed class NameRule : ITokenRule
 {
@@ -36,9 +37,13 @@ public sealed class NameRule : ITokenRule
     /// <inheritdoc />
     public string CreateToken(string normalized, IRandomSource random, int attempt)
     {
-        var name = $"{FirstNames[random.Next(FirstNames.Length)]} {LastNames[random.Next(LastNames.Length)]}";
+        // Keep the original's shape: a single word (a first-name or last-name column) gets one fake word.
+        var isSingleWord = !normalized.Contains(' ');
+        var name = isSingleWord
+            ? (random.Next(2) == 0 ? FirstNames[random.Next(FirstNames.Length)] : LastNames[random.Next(LastNames.Length)])
+            : $"{FirstNames[random.Next(FirstNames.Length)]} {LastNames[random.Next(LastNames.Length)]}";
 
-        // 900 plain combinations run out in large files; a suffix of 1-9999 widens the space to about 9 million.
+        // The plain lists run out in large files; a suffix of 1-9999 widens the space by about 10,000 times.
         return attempt < PlainNameAttempts ? name : $"{name} {1 + random.Next(9999)}";
     }
 }
