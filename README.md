@@ -2,7 +2,7 @@
 
 Masque is a local layer between an AI assistant and sensitive data. It replaces PII (personally identifiable information) and PHI (protected health information) with consistent fake values before the assistant sees them. The same real value always becomes the same fake one, so joins, counts and "is this the same person?" still work. Real values never leave your machine.
 
-> **Status:** early. The core tokenizer and its rules are built and tested. File, SQL and assistant integration come next (see [Roadmap](#roadmap)).
+> **Status:** early. The tokenizer, its rules and the encrypted vault are built and tested. File, SQL and assistant integration come next (see [Roadmap](#roadmap)).
 
 > **Not a compliance certification.** Masque lowers the risk of exposing data; it does not by itself make data "de-identified" under HIPAA or any other law. Detection of free text is best-effort. Before you use it on real data, confirm with your compliance team that your organization allows tokenized data to reach your AI vendor.
 
@@ -27,6 +27,24 @@ Masque is a local layer between an AI assistant and sensitive data. It replaces 
 | Money, codes | unchanged | Calculations must still reproduce |
 | Anything else | `[ADDRESS-1A2B3C4D]` | Redacted until a specific rule exists |
 
+## The vault
+
+The vault is a local SQLite file (`Masque.Vault`). No real value in it is readable:
+
+| Column | Holds | Purpose |
+| --- | --- | --- |
+| `value_index` | HMAC-SHA256 of the value, under the vault's own key | Finds a value without storing it; can't be reversed or guessed without the key |
+| `value_cipher` | The value encrypted with AES-GCM, bound to its row | Lets `reveal` recover the real value |
+| `token` | The fake value | What the assistant sees |
+
+Each vault makes its own random 256-bit key and stores it wrapped by the OS secret store, so only the user who made the vault can open it. Windows uses DPAPI; macOS Keychain and Linux libsecret are planned. Tokens themselves are random, never derived from the real value.
+
+```csharp
+using var vault = SqliteTokenVault.Open(path, KeyProtectors.ForCurrentPlatform());
+var tokenizer = Tokenizer.CreateDefault(vault, CryptoRandomSource.Shared);
+tokenizer.Tokenize(PiiCategory.Ssn, "123-45-6789"); // same token every run
+```
+
 ## Build and test
 
 Requires the .NET 10 SDK.
@@ -39,15 +57,17 @@ dotnet test Masque.slnx
 ## Layout
 
 ```
-src/S01_Core/C001_Core/              Masque.Core: categories, rules, tokenizer, vault
-tests/S01_Core/C001_Core.Tests/      xUnit v3 + Shouldly tests for Masque.Core
+src/S01_Core/C001_Core/              Masque.Core: categories, rules, tokenizer, vault contract, in-memory vault
+src/S01_Core/C002_Vault/             Masque.Vault: encrypted SQLite vault, OS key protection
+tests/S01_Core/C001_Core.Tests/      xUnit v3 + Shouldly tests for Masque.Core (incl. the shared vault contract)
+tests/S01_Core/C002_Vault.Tests/     Tests for Masque.Vault
 ```
 
 Folders follow `<Area>/SNN_Section/CNNN_Name/`; assemblies keep clean names (`Masque.Core`).
 
 ## Roadmap
 
-1. **Core** (in progress): tokenizer, rules and in-memory vault are done. Next: SQLite vault encrypted with the OS secret store (DPAPI on Windows, Keychain on macOS, libsecret on Linux), date shifting per person.
+1. **Core** (in progress): tokenizer, rules, in-memory vault and encrypted SQLite vault with Windows key protection are done. Next: macOS Keychain and Linux libsecret key protectors, date shifting per person.
 2. **CSV and CLI:** `masque file.csv` writes `file.masque.csv`; header and value detectors; saved configs.
 3. **Excel and SQL:** sheet adapter with header-row detection; SQL result adapter.
 4. **MCP server and hooks:** `read_anonymized`, `query_anonymized`; hooks that block raw reads.

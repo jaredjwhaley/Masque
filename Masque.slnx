@@ -8,9 +8,11 @@
   <Folder Name="/src/" />
   <Folder Name="/src/S01_Core/">
     <Project Path="src/S01_Core/C001_Core/C001_Core.csproj" />
+    <Project Path="src/S01_Core/C002_Vault/C002_Vault.csproj" />
   </Folder>
   <Folder Name="/tests/" />
   <Folder Name="/tests/S01_Core/">
     <Project Path="tests/S01_Core/C001_Core.Tests/C001_Core.Tests.csproj" />
+    <Project Path="tests/S01_Core/C002_Vault.Tests/C002_Vault.Tests.csproj" />
   </Folder>
 </Solution>

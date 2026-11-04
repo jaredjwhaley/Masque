@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>Masque.Vault.Tests</AssemblyName>
+    <RootNamespace>Masque.Vault.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+    <!-- Test methods are documented by their names. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="Shouldly" Version="4.3.0" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="Shouldly" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Shared vault contract and test helpers, compiled in rather than referencing another test project. -->
+    <Compile Include="..\C001_Core.Tests\Vault\TokenVaultContractTests.cs" Link="Shared\TokenVaultContractTests.cs" />
+    <Compile Include="..\C001_Core.Tests\TestSupport\SeededRandomSource.cs" Link="Shared\SeededRandomSource.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\S01_Core\C002_Vault\C002_Vault.csproj" />
+  </ItemGroup>
+
+</Project>

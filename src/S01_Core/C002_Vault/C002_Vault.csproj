@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>Masque.Vault</AssemblyName>
+    <RootNamespace>Masque.Vault</RootNamespace>
+    <Description>Persistent token vault: a SQLite file whose real values are encrypted, with the key held by the OS secret store.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.14" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.14" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Masque.Vault.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\C001_Core\C001_Core.csproj" />
+  </ItemGroup>
+
+</Project>
