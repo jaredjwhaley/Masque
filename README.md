@@ -2,7 +2,7 @@
 
 Masque is a local layer between an AI assistant and sensitive data. It replaces PII (personally identifiable information) and PHI (protected health information) with consistent fake values before the assistant sees them. The same real value always becomes the same fake one, so joins, counts and "is this the same person?" still work. Real values never leave your machine.
 
-> **Status:** early (0.1.0). The `masque` command masks CSV files end to end on Windows. Excel, SQL and assistant integration come next (see [Roadmap](#roadmap)).
+> **Status:** early (0.1.0). The `masque` command masks CSV files end to end on Windows. The `masque-mcp` server lets an AI assistant run read-only SQL over CSV, Excel, SQLite and SQL Server tables and see only masked results (see [Query tables through an assistant](#query-tables-through-an-assistant)).
 
 > **Not a compliance certification.** Masque lowers the risk of exposing data; it does not by itself make data "de-identified" under HIPAA or any other law. Detection of free text is best-effort. Before you use it on real data, confirm with your compliance team that your organization allows tokenized data to reach your AI vendor.
 
@@ -46,6 +46,40 @@ Exit codes: 0 done, 1 error, 2 review needed, 64 bad arguments.
 dotnet pack src/S03_Tools/C004_Cli -o nupkg
 dotnet tool install --global Masque --add-source nupkg
 ```
+
+## Query tables through an assistant
+
+`masque-mcp` is an MCP (Model Context Protocol) server: a local program an AI assistant calls as a tool. It gives the assistant two tools:
+
+| Tool | What it does |
+| --- | --- |
+| `masque_describe(source)` | Lists tables, columns and each column's category. No values. Proposes a config for any new table shape. |
+| `masque_query(source, sql, maxRows)` | Runs one read-only `SELECT` and returns the rows masked: tokens for sensitive values, real values for amounts, counts and codes. |
+
+A **source** is a CSV/TSV file, an Excel workbook (each sheet is a table), a SQLite database, a folder of CSV and Excel files (each file is a table, so they can be joined), or a name from `sources.json` (for SQL Server, so connection strings never pass through the assistant):
+
+```json
+{ "sources": {
+    "hr":     { "type": "sqlServer", "connectionString": "Server=.;Database=Hr;Integrated Security=true;TrustServerCertificate=true" },
+    "clinic": { "type": "sqlite",    "path": "C:\\data\\clinic.db" },
+    "drops":  { "type": "file",      "path": "C:\\data\\drops" } } }
+```
+
+CSV and Excel tables are loaded into a private in-memory SQLite database for each call, so one SQL dialect covers every file type.
+
+**How a result is masked.** The database reports, for each result column, the table column it came from (its *lineage*). That column's confirmed category decides the masking, so renaming a column in the query (`SELECT SSN AS x`) changes nothing. A computed column (an aggregate or expression) has no lineage: it is classified from its name and values and may come back readable only as a count (a name containing "count", whole numbers) or an amount (a name like `total_pay`, numeric values). A readable column whose values don't fit its category (an SSN in a "Status" column) is masked anyway.
+
+**Safeguards.** One `SELECT` (or `WITH ... SELECT`) per call; writes, procedures, `ATTACH`, `INTO` and `UNION`/`INTERSECT`/`EXCEPT` are refused before anything runs. SQLite sources are opened read-only with `ATTACH` disabled; SQL Server queries run in a transaction that is always rolled back (still use a read-only login). At most 1,000 rows per call. Database errors that can quote a value are hidden. A new table shape returns no rows until a person reviews its config and sets `"confirmed": true`.
+
+**Register it with Claude Code** (build first: `dotnet build src/S03_Tools/C008_Mcp -c Release`):
+
+```bash
+claude mcp add masque --scope user -e MASQUE_HOME=C:\Users\you\.masque -- dotnet <repo>/src/S03_Tools/C008_Mcp/bin/Release/net10.0/Masque.Mcp.dll
+```
+
+Set `MASQUE_HOME` to the same folder for the `masque` CLI too (a user environment variable), so both share one vault and one set of configs. Packaged apps such as Claude Desktop on Windows redirect `%LOCALAPPDATA%` to a private folder, so without it they would get a separate vault and different tokens.
+
+**Known limits.** A computed expression deliberately disguised as an amount (`SSN_number + 0 AS total`) can pass through; Masque guards against accidents, not a hostile query writer. Filtering by a token (`WHERE Name = 'Avery Brooks'`) finds nothing yet. Excel number formats are ignored (a ZIP stored as a number loses its leading zero), and a title row above the header isn't detected. Files are reloaded on every call.
 
 ## How it works
 
@@ -101,11 +135,19 @@ dotnet test Masque.slnx
 src/S01_Core/C001_Core/              Masque.Core: categories, rules, tokenizer, vault contract, in-memory vault
 src/S01_Core/C002_Vault/             Masque.Vault: encrypted SQLite vault, OS key protection
 src/S02_Adapters/C003_Csv/           Masque.Csv: CSV sampling and masked copies (CsvHelper)
+src/S02_Adapters/C005_Excel/         Masque.Excel: workbook sheets as tables (ExcelDataReader)
+src/S02_Adapters/C006_Sqlite/        Masque.Sqlite: SQLite query source; hosts CSV/Excel tables in memory
+src/S02_Adapters/C007_SqlServer/     Masque.SqlServer: SQL Server query source
 src/S03_Tools/C004_Cli/              Masque.Cli: the `masque` command (packs as a dotnet tool)
+src/S03_Tools/C008_Mcp/              Masque.Mcp: the `masque-mcp` MCP server (packs as a dotnet tool)
 tests/S01_Core/C001_Core.Tests/      xUnit v3 + Shouldly tests for Masque.Core (incl. the shared vault contract)
 tests/S01_Core/C002_Vault.Tests/     Tests for Masque.Vault
 tests/S02_Adapters/C003_Csv.Tests/   Tests for Masque.Csv
+tests/S02_Adapters/C005_Excel.Tests/ Tests for Masque.Excel
+tests/S02_Adapters/C006_Sqlite.Tests/ Tests for Masque.Sqlite
+tests/S02_Adapters/C007_SqlServer.Tests/ Tests for Masque.SqlServer (need LocalDB or MASQUE_TEST_SQLSERVER; skipped otherwise)
 tests/S03_Tools/C004_Cli.Tests/      End-to-end tests for the command
+tests/S03_Tools/C008_Mcp.Tests/      End-to-end tests for the MCP tools
 ```
 
 Folders follow `<Area>/SNN_Section/CNNN_Name/`; assemblies keep clean names (`Masque.Core`).
@@ -114,8 +156,8 @@ Folders follow `<Area>/SNN_Section/CNNN_Name/`; assemblies keep clean names (`Ma
 
 1. **Core** (in progress): tokenizer, rules, in-memory vault and encrypted SQLite vault with Windows key protection are done. Next: macOS Keychain and Linux libsecret key protectors, date shifting per person.
 2. **CSV and CLI** (done): `masque file.csv` writes `file.masque.csv`; header and value detectors; saved configs with a review step. Dates are fully redacted until date shifting lands.
-3. **Excel and SQL:** sheet adapter with header-row detection; SQL result adapter.
-4. **MCP server and hooks:** `read_anonymized`, `query_anonymized`; hooks that block raw reads.
+3. **Excel and SQL** (first cut done): masked queries over CSV, Excel, SQLite and SQL Server with column lineage. Next: title-row detection and number formats in Excel, token-aware filters (a token in a `WHERE` matches its real value), caching loaded files.
+4. **MCP server and hooks:** `masque_describe` and `masque_query` done. Next: hooks that block raw reads of data files, and a way to confirm configs that the assistant can't use.
 5. **Free text:** NER, a clipboard command, and a prompt-submit hook.
 6. **PDF** extraction.
 7. **Reveal** command.

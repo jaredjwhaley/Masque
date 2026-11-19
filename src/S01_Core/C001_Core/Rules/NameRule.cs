@@ -25,7 +25,7 @@ public sealed class NameRule : ITokenRule
     ];
 
     /// <inheritdoc />
-    public PiiCategory Category => PiiCategory.Name;
+    public SensitiveDataType Category => SensitiveDataType.Name;
 
     /// <inheritdoc />
     public TokenRuleKind Kind => TokenRuleKind.Vaulted;

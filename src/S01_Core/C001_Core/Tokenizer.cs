@@ -15,7 +15,7 @@ public sealed class Tokenizer
 
     private readonly ITokenVault _vault;
     private readonly IRandomSource _random;
-    private readonly Dictionary<PiiCategory, ITokenRule> _rules = [];
+    private readonly Dictionary<SensitiveDataType, ITokenRule> _rules = [];
 
     /// <summary>Creates a tokenizer with an explicit rule set.</summary>
     /// <param name="vault">Where value-to-token pairs are stored.</param>
@@ -50,9 +50,9 @@ public sealed class Tokenizer
     /// <returns>A new list of rule instances.</returns>
     public static IReadOnlyList<ITokenRule> DefaultRules() =>
     [
-        new PassThroughRule(PiiCategory.Safe),
-        new PassThroughRule(PiiCategory.Money),
-        new PassThroughRule(PiiCategory.Code),
+        new PassThroughRule(SensitiveDataType.Safe),
+        new PassThroughRule(SensitiveDataType.Money),
+        new PassThroughRule(SensitiveDataType.Code),
         new SsnRule(),
         new EmailRule(),
         new PhoneRule(),
@@ -67,7 +67,7 @@ public sealed class Tokenizer
     /// <returns>The token, or the value itself for pass-through categories.</returns>
     /// <exception cref="TokenSpaceExhaustedException">The rule could not find an unused token.</exception>
     [return: NotNullIfNotNull(nameof(value))]
-    public string? Tokenize(PiiCategory category, string? value)
+    public string? Tokenize(SensitiveDataType category, string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
@@ -85,7 +85,7 @@ public sealed class Tokenizer
     }
 
     /// <summary>Finds the rule for a category; unknown categories are redacted (fail closed).</summary>
-    private ITokenRule GetRule(PiiCategory category)
+    private ITokenRule GetRule(SensitiveDataType category)
     {
         if (!_rules.TryGetValue(category, out var rule))
         {

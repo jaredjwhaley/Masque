@@ -104,7 +104,7 @@ public class RuleTests
     [Fact]
     public void Redact_Token_NamesTheCategoryAndHidesTheValue()
     {
-        new RedactRule(PiiCategory.FreeText).CreateToken("anything", _random, attempt: 0)
+        new RedactRule(SensitiveDataType.FreeText).CreateToken("anything", _random, attempt: 0)
             .ShouldMatch(@"^\[FREETEXT-[0-9A-F]{8}\]$");
     }
 }

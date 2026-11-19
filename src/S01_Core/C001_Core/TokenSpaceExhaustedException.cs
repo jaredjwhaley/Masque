@@ -9,7 +9,7 @@ public sealed class TokenSpaceExhaustedException : InvalidOperationException
     /// <summary>Creates the exception for a category that ran out of unique tokens.</summary>
     /// <param name="category">The category whose rule ran out.</param>
     /// <param name="attempts">How many candidates were tried.</param>
-    public TokenSpaceExhaustedException(PiiCategory category, int attempts)
+    public TokenSpaceExhaustedException(SensitiveDataType category, int attempts)
         : base($"No unused {category} token found after {attempts} attempts. The token format is too small for this data.")
     {
         Category = category;
@@ -17,7 +17,7 @@ public sealed class TokenSpaceExhaustedException : InvalidOperationException
     }
 
     /// <summary>The category whose rule ran out of tokens.</summary>
-    public PiiCategory Category { get; }
+    public SensitiveDataType Category { get; }
 
     /// <summary>How many candidates were tried.</summary>
     public int Attempts { get; }

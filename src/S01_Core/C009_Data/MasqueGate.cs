@@ -1,0 +1,300 @@
+using System.Data;
+using System.Data.Common;
+using Masque.Core;
+using Masque.Core.Config;
+using Masque.Core.Detection;
+using Masque.Core.Policy;
+using Masque.Core.Query;
+using Masque.Core.Vault;
+using Masque.Data.Access;
+using Masque.Data.Dialects;
+using Masque.Data.Masking;
+using Masque.Data.Review;
+
+namespace Masque.Data;
+
+/// <summary>
+/// The gate every query passes through. It wraps connections so their results come back masked, checks each
+/// statement against what the caller may see and do, and owns the vault, configs and policy behind that. Create one
+/// per application (<see cref="Create"/>, or <c>services.AddMasque(...)</c>) and wrap each connection with it.
+/// </summary>
+public sealed class MasqueGate : IDisposable
+{
+    private readonly MaskingPolicy _policy;
+    private readonly ICallerIdentityProvider _caller;
+    private readonly ConfigStore _configs;
+    private readonly IReadOnlyList<IMasqueDialect> _dialects;
+    private readonly TableReviewer _reviewer;
+    private readonly ColumnPlanner _planner;
+    private readonly ValueMasker _masker;
+    private readonly IDisposable? _ownedVault;
+
+    /// <summary>Creates a gate from its parts. Most applications use <see cref="Create"/> or <c>AddMasque</c> instead.</summary>
+    /// <param name="policy">Who may see which types raw, and who may write.</param>
+    /// <param name="caller">Says who is calling when a connection is wrapped.</param>
+    /// <param name="configs">Where reviewed table configs are kept.</param>
+    /// <param name="vault">Where tokens and the values behind them are kept.</param>
+    /// <param name="dialects">The databases this gate can handle.</param>
+    /// <param name="classifier">Classifies new tables and spots sensitive-looking values; defaults to the standard set.</param>
+    /// <param name="random">Randomness for new tokens; defaults to a cryptographic source.</param>
+    public MasqueGate(
+        MaskingPolicy policy,
+        ICallerIdentityProvider caller,
+        ConfigStore configs,
+        ITokenVault vault,
+        IEnumerable<IMasqueDialect> dialects,
+        ColumnClassifier? classifier = null,
+        IRandomSource? random = null)
+        : this(policy, caller, configs, vault, dialects, classifier, random, ownedVault: null)
+    {
+    }
+
+    private MasqueGate(
+        MaskingPolicy policy,
+        ICallerIdentityProvider caller,
+        ConfigStore configs,
+        ITokenVault vault,
+        IEnumerable<IMasqueDialect> dialects,
+        ColumnClassifier? classifier,
+        IRandomSource? random,
+        IDisposable? ownedVault)
+    {
+        _policy = policy ?? throw new ArgumentNullException(nameof(policy));
+        _caller = caller ?? throw new ArgumentNullException(nameof(caller));
+        _configs = configs ?? throw new ArgumentNullException(nameof(configs));
+        ArgumentNullException.ThrowIfNull(vault);
+        _dialects = dialects?.ToList() ?? throw new ArgumentNullException(nameof(dialects));
+
+        var detection = classifier ?? ColumnClassifier.Default;
+        _reviewer = new TableReviewer(configs, new ConfigProposer(configs, detection));
+        _planner = new ColumnPlanner(_reviewer);
+        _masker = new ValueMasker(Tokenizer.CreateDefault(vault, random ?? CryptoRandomSource.Shared), vault, detection);
+        _ownedVault = ownedVault;
+    }
+
+    /// <summary>Builds a gate from options, loading the policy files and opening the default vault as needed.</summary>
+    /// <param name="options">The options; see <see cref="MasqueOptions"/> for defaults.</param>
+    /// <returns>The gate. Dispose it to close a vault it opened.</returns>
+    /// <exception cref="PolicyException">A policy file exists but can't be read.</exception>
+    public static MasqueGate Create(MasqueOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        var policy = options.ResolvePolicy();
+        var configs = new ConfigStore(options.ConfigFolder ?? MasquePaths.DefaultConfigs);
+        var (vault, owned) = options.ResolveVault();
+        try
+        {
+            return new MasqueGate(policy, options.Caller ?? DefaultCaller(), configs, vault,
+                options.Dialects, options.Classifier, options.Random, owned);
+        }
+        catch
+        {
+            owned?.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>The signed-in Windows user and their groups; elsewhere, the OS user name with no groups.</summary>
+    private static ICallerIdentityProvider DefaultCaller() =>
+        OperatingSystem.IsWindows() ? new WindowsCallerIdentityProvider() : new FixedCallerIdentityProvider(Environment.UserName);
+
+    /// <summary>Wraps a connection so every command run through it is checked and its results masked.</summary>
+    /// <param name="connection">The raw connection, open or not. The wrapper owns it from now on.</param>
+    /// <param name="allowRaw">
+    /// Raw types to allow on this connection; narrows the caller's policy and never widens it. Null keeps the policy.
+    /// </param>
+    /// <returns>The wrapper; or <paramref name="connection"/> itself when it is already wrapped.</returns>
+    /// <exception cref="NotSupportedException">No dialect handles this kind of connection.</exception>
+    public MaskingDbConnection Wrap(DbConnection connection, IEnumerable<SensitiveDataType>? allowRaw = null)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+
+        if (connection is MaskingDbConnection wrapped)
+        {
+            return wrapped;
+        }
+
+        var dialect = _dialects.FirstOrDefault(d => d.Supports(connection))
+            ?? throw new NotSupportedException(
+                $"Masque has no dialect for {connection.GetType().Name}. Add one to MasqueOptions.Dialects (for example, new SqliteDialect()).");
+
+        var grant = _policy.GrantFor(_caller.Current()).Narrow(allowRaw);
+        return new MaskingDbConnection(this, connection, new MasqueSession(connection, dialect), grant);
+    }
+
+    /// <summary>
+    /// Lists a connection's tables with their column settings: the reviewed config, or a proposal saved for a person
+    /// to review. Shows names and types only, never values.
+    /// </summary>
+    /// <param name="connection">A connection this gate wrapped; opened if it is closed.</param>
+    /// <returns>One entry per listed table.</returns>
+    public IReadOnlyList<TableConfig> DescribeTables(MaskingDbConnection connection)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        if (!ReferenceEquals(connection.Gate, this))
+        {
+            throw new ArgumentException("The connection was wrapped by a different Masque gate.", nameof(connection));
+        }
+
+        if (connection.State != ConnectionState.Open)
+        {
+            connection.Open();
+        }
+
+        try
+        {
+            return connection.Session.ListedTables().Select(table => _reviewer.Load(connection.Session, table)).ToList();
+        }
+        catch (DbException ex)
+        {
+            throw connection.Session.Dialect.Describe(ex);
+        }
+    }
+
+    /// <summary>Narrows a grant by a command's allow list and any <c>-- masque: allow</c> tags in its SQL.</summary>
+    /// <param name="grant">The connection's grant.</param>
+    /// <param name="commandAllow">The command's allow list, or null.</param>
+    /// <param name="commandText">The SQL text.</param>
+    /// <returns>The command's grant.</returns>
+    internal static AccessGrant GrantFor(AccessGrant grant, IEnumerable<SensitiveDataType>? commandAllow, string? commandText) =>
+        grant.Narrow(commandAllow).Narrow(AllowTag.Parse(commandText));
+
+    /// <summary>
+    /// Checks a statement and readies the raw command to run it: refuses what the caller may not do, loads reviewed
+    /// configs for its tables, and swaps tokens the caller filters on for parameters holding the real values.
+    /// </summary>
+    /// <param name="inner">The raw command; its text and parameters are changed until the result is disposed.</param>
+    /// <param name="commandText">The SQL the caller sent.</param>
+    /// <param name="commandType">The caller's command type; only text is supported.</param>
+    /// <param name="session">The connection's session.</param>
+    /// <param name="grant">What the caller may see raw and whether they may write.</param>
+    /// <returns>The prepared command.</returns>
+    /// <exception cref="QueryRejectedException">The statement isn't allowed.</exception>
+    /// <exception cref="ReviewRequiredException">A table's config still needs a person's review.</exception>
+    internal PreparedCommand Prepare(DbCommand inner, string? commandText, CommandType commandType, MasqueSession session, AccessGrant grant)
+    {
+        if (commandType != CommandType.Text)
+        {
+            throw new QueryRejectedException(
+                $"Masque runs SQL text only; {commandType} commands can't be checked. Send the SQL itself.");
+        }
+
+        var statement = SqlStatement.Parse(commandText);
+        if (statement.Kind != StatementKind.Select && !grant.CanWrite)
+        {
+            throw new QueryRejectedException(
+                $"This caller may not write: the Masque policy doesn't allow {statement.Kind.ToString().ToUpperInvariant()} statements for them.");
+        }
+
+        var masked = MaskedColumns(statement, session, grant);
+        var review = statement.Review(masked);
+
+        var (text, added) = RewriteTokenFilters(inner, commandText!, review);
+        inner.CommandText = text;
+        return new PreparedCommand(inner, commandText!, added, session, grant, statement, review);
+    }
+
+    /// <summary>Wraps a raw reader so its values are masked by plan.</summary>
+    /// <param name="reader">The raw reader.</param>
+    /// <param name="prepared">The command that produced it; disposed with the reader.</param>
+    /// <returns>The masking reader.</returns>
+    internal MaskingDbDataReader WrapReader(DbDataReader reader, PreparedCommand prepared)
+    {
+        try
+        {
+            var columns = prepared.Session.Dialect.ReadColumns(reader);
+            var plans = _planner.Plan(columns, prepared.Session, prepared.Grant, prepared.Review);
+            return new MaskingDbDataReader(reader, columns, plans, _masker, prepared);
+        }
+        catch
+        {
+            reader.Dispose();
+            prepared.Dispose();
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public void Dispose() => _ownedVault?.Dispose();
+
+    /// <summary>Collects the columns masked for this caller across the statement's tables, by column name.</summary>
+    private Dictionary<string, SensitiveDataType> MaskedColumns(SqlStatement statement, MasqueSession session, AccessGrant grant)
+    {
+        var pending = new List<TableConfig>();
+        var masked = new Dictionary<string, SensitiveDataType>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var named in statement.Tables)
+        {
+            var table = session.FindListed(named) ?? throw new QueryRejectedException(
+                $"{named.Qualified} isn't a table Masque can read: the database doesn't list it as a user table or view.");
+
+            var config = _reviewer.Reviewed(session, table, pending);
+            if (config is null)
+            {
+                continue;
+            }
+
+            foreach (var rule in config.Columns.Where(r => r.Category.IsSensitive() && !grant.Shows(r.Category)))
+            {
+                // The same column name with different types in two tables: free text covers either, and tokens of
+                // either type can't be resolved by mistake.
+                masked[rule.Header] = masked.TryGetValue(rule.Header, out var existing) && existing != rule.Category
+                    ? SensitiveDataType.FreeText
+                    : rule.Category;
+            }
+        }
+
+        return pending.Count > 0 ? throw new ReviewRequiredException(pending) : masked;
+    }
+
+    /// <summary>
+    /// Swaps each known token compared with a masked column for parameters holding every form of its real value (the
+    /// normalized value and each spelling seen in the data), since a source may store the value in any of them:
+    /// <c>col = 'token'</c> becomes <c>col IN (@a, @b)</c>, <c>'token' &lt;&gt; col</c> becomes
+    /// <c>col NOT IN (@a, @b)</c>, and an IN-list item becomes <c>@a, @b</c>. Literals that aren't tokens stay as
+    /// written. Works back to front so earlier positions hold.
+    /// </summary>
+    private (string Text, IReadOnlyList<DbParameter> Added) RewriteTokenFilters(DbCommand inner, string text, StatementReview review)
+    {
+        var added = new List<DbParameter>();
+        foreach (var filter in review.TokenFilters.OrderByDescending(f => f.Comparison?.Start ?? f.Start))
+        {
+            if (!_masker.TryResolve(filter.Type, filter.Literal, out var values))
+            {
+                continue;
+            }
+
+            var list = string.Join(", ", values.Select(value => AddFilterParameter(inner, value, added)));
+
+            // Spans are replaced back to front, so the column (inside its own condition) is still at its position.
+            var (start, length, replacement) = filter.Comparison is { } comparison
+                ? (comparison.Start, comparison.Length,
+                    $"{text.AsSpan(comparison.ColumnStart, comparison.ColumnLength)} {(comparison.Negated ? "NOT IN" : "IN")} ({list})")
+                : (filter.Start, filter.Length, list);
+
+            text = string.Concat(text.AsSpan(0, start), replacement, text.AsSpan(start + length));
+        }
+
+        return (text, added);
+    }
+
+    /// <summary>Adds one string parameter for a token filter and returns its name.</summary>
+    /// <exception cref="QueryRejectedException">The caller already uses Masque's reserved parameter name.</exception>
+    private static string AddFilterParameter(DbCommand inner, string value, List<DbParameter> added)
+    {
+        var name = $"@masque_filter_{added.Count}";
+        if (inner.Parameters.Contains(name) || inner.Parameters.Contains(name[1..]))
+        {
+            throw new QueryRejectedException("Parameter names starting with masque_filter_ are reserved for Masque.");
+        }
+
+        var parameter = inner.CreateParameter();
+        parameter.ParameterName = name;
+        parameter.DbType = DbType.String;
+        parameter.Value = value;
+        inner.Parameters.Add(parameter);
+        added.Add(parameter);
+        return name;
+    }
+}

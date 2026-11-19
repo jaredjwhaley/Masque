@@ -19,7 +19,7 @@ public sealed partial class ZipRule : ITokenRule
     ];
 
     /// <inheritdoc />
-    public PiiCategory Category => PiiCategory.Zip;
+    public SensitiveDataType Category => SensitiveDataType.Zip;
 
     /// <inheritdoc />
     public TokenRuleKind Kind => TokenRuleKind.Transform;

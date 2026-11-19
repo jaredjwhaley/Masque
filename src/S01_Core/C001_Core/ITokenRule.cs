@@ -14,12 +14,12 @@ public enum TokenRuleKind
 }
 
 /// <summary>
-/// De-identification rule for one <see cref="PiiCategory"/>: how to normalize a value and what its token looks like.
+/// De-identification rule for one <see cref="SensitiveDataType"/>: how to normalize a value and what its token looks like.
 /// </summary>
 public interface ITokenRule
 {
     /// <summary>The category this rule handles. A tokenizer holds at most one rule per category.</summary>
-    PiiCategory Category { get; }
+    SensitiveDataType Category { get; }
 
     /// <summary>How the tokenizer applies this rule.</summary>
     TokenRuleKind Kind { get; }

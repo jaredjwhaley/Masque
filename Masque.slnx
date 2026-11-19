@@ -9,22 +9,32 @@
   <Folder Name="/src/S01_Core/">
     <Project Path="src/S01_Core/C001_Core/C001_Core.csproj" />
     <Project Path="src/S01_Core/C002_Vault/C002_Vault.csproj" />
+    <Project Path="src/S01_Core/C009_Data/C009_Data.csproj" />
   </Folder>
   <Folder Name="/src/S02_Adapters/">
     <Project Path="src/S02_Adapters/C003_Csv/C003_Csv.csproj" />
+    <Project Path="src/S02_Adapters/C005_Excel/C005_Excel.csproj" />
+    <Project Path="src/S02_Adapters/C006_Sqlite/C006_Sqlite.csproj" />
+    <Project Path="src/S02_Adapters/C007_SqlServer/C007_SqlServer.csproj" />
   </Folder>
   <Folder Name="/src/S03_Tools/">
     <Project Path="src/S03_Tools/C004_Cli/C004_Cli.csproj" />
+    <Project Path="src/S03_Tools/C008_Mcp/C008_Mcp.csproj" />
   </Folder>
   <Folder Name="/tests/" />
   <Folder Name="/tests/S01_Core/">
     <Project Path="tests/S01_Core/C001_Core.Tests/C001_Core.Tests.csproj" />
     <Project Path="tests/S01_Core/C002_Vault.Tests/C002_Vault.Tests.csproj" />
+    <Project Path="tests/S01_Core/C009_Data.Tests/C009_Data.Tests.csproj" />
   </Folder>
   <Folder Name="/tests/S02_Adapters/">
     <Project Path="tests/S02_Adapters/C003_Csv.Tests/C003_Csv.Tests.csproj" />
+    <Project Path="tests/S02_Adapters/C005_Excel.Tests/C005_Excel.Tests.csproj" />
+    <Project Path="tests/S02_Adapters/C006_Sqlite.Tests/C006_Sqlite.Tests.csproj" />
+    <Project Path="tests/S02_Adapters/C007_SqlServer.Tests/C007_SqlServer.Tests.csproj" />
   </Folder>
   <Folder Name="/tests/S03_Tools/">
     <Project Path="tests/S03_Tools/C004_Cli.Tests/C004_Cli.Tests.csproj" />
+    <Project Path="tests/S03_Tools/C008_Mcp.Tests/C008_Mcp.Tests.csproj" />
   </Folder>
 </Solution>

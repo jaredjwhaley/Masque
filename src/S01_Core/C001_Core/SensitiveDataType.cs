@@ -1,9 +1,10 @@
 namespace Masque.Core;
 
 /// <summary>
-/// What kind of value a column or text span holds. The category picks the rule that de-identifies it.
+/// The kinds of data Masque recognises. A column's type picks the rule that de-identifies its values, and policies
+/// name types to say what a caller may see raw.
 /// </summary>
-public enum PiiCategory
+public enum SensitiveDataType
 {
     /// <summary>Not sensitive; passed through unchanged. Only assigned when a person or saved config says so.</summary>
     Safe,
@@ -43,4 +44,18 @@ public enum PiiCategory
 
     /// <summary>Free text that may contain anything, such as a notes field.</summary>
     FreeText,
+}
+
+/// <summary>Helpers for <see cref="SensitiveDataType"/>.</summary>
+public static class SensitiveDataTypes
+{
+    /// <summary>
+    /// Whether values of this type identify or describe a person and so are masked unless a policy allows them raw.
+    /// Only <see cref="SensitiveDataType.Safe"/>, <see cref="SensitiveDataType.Money"/> and
+    /// <see cref="SensitiveDataType.Code"/> are not.
+    /// </summary>
+    /// <param name="type">The type to check.</param>
+    /// <returns><see langword="true"/> for every type that is masked by default.</returns>
+    public static bool IsSensitive(this SensitiveDataType type) =>
+        type is not (SensitiveDataType.Safe or SensitiveDataType.Money or SensitiveDataType.Code);
 }

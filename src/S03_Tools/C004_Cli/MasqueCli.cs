@@ -68,31 +68,32 @@ public static class MasqueCli
         var sample = CsvTable.ReadSample(options.InputPath);
 
         // Without a header row, the "headers" are real data, and printing them would leak it.
-        if (sample.Headers.Any(ValuePatternDetector.LooksLikePersonalValue))
+        if (sample.Headers.Any(ColumnClassifier.Default.LooksLikeSensitiveValue))
         {
             throw new CsvTableException(
                 "The first row looks like data, not column headers. Add a header row and try again.");
         }
 
         var store = new ConfigStore(options.ConfigFolder);
-        var fingerprint = SchemaFingerprint.Compute(sample.Headers);
-        var config = store.Load(fingerprint) ?? Propose(fingerprint, sample, store);
+        var proposer = new ConfigProposer(store, ColumnClassifier.CreateDefault());
+        var config = proposer.LoadOrPropose(Path.GetFileName(options.InputPath), sample.Headers, sample.ColumnSamples).Config;
+        var fingerprint = config.Fingerprint;
 
         WritePlan(output, options.InputPath, fingerprint, config);
 
-        if (!config.Confirmed)
+        if (!config.ReviewedByPerson)
         {
             if (!options.Accept)
             {
                 output.WriteLine();
                 output.WriteLine("This is a new set of columns. Review the proposed categories in:");
                 output.WriteLine($"  {store.PathFor(fingerprint)}");
-                output.WriteLine($"Change any category if needed ({string.Join(", ", Enum.GetNames<PiiCategory>())}),");
+                output.WriteLine($"Change any category if needed ({string.Join(", ", Enum.GetNames<SensitiveDataType>())}),");
                 output.WriteLine("then run the same command again with --accept.");
                 return ExitCodes.NeedsReview;
             }
 
-            config = config with { Confirmed = true };
+            config = config with { ReviewedByPerson = true };
             store.Save(config);
             output.WriteLine("Config confirmed; files with these columns will run without review from now on.");
         }
@@ -108,23 +109,9 @@ public static class MasqueCli
         return ExitCodes.Success;
     }
 
-    /// <summary>Classifies each column and saves the result as an unconfirmed config for review.</summary>
-    private static MaskConfig Propose(string fingerprint, CsvSample sample, ConfigStore store)
-    {
-        var classifier = ColumnClassifier.CreateDefault();
-        var columns = sample.Headers
-            .Select((header, i) => classifier.Classify(i, header, sample.ColumnSamples[i]))
-            .Select(plan => new ColumnRule(plan.Header, plan.Category, plan.Reason))
-            .ToList();
-
-        var config = new MaskConfig(fingerprint, Confirmed: false, columns);
-        store.Save(config);
-        return config;
-    }
-
     private static void WritePlan(TextWriter output, string inputPath, string fingerprint, MaskConfig config)
     {
-        output.WriteLine($"Columns in {Path.GetFileName(inputPath)} (shape {fingerprint}, {(config.Confirmed ? "confirmed" : "proposed")}):");
+        output.WriteLine($"Columns in {Path.GetFileName(inputPath)} (shape {fingerprint}, {(config.ReviewedByPerson ? "confirmed" : "proposed")}):");
 
         var width = config.Columns.Count == 0 ? 0 : config.Columns.Max(c => c.Header.Length);
         foreach (var column in config.Columns)

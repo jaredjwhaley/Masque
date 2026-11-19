@@ -3,6 +3,7 @@ using System.Text;
 using CsvHelper;
 using CsvHelper.Configuration;
 using Masque.Core;
+using Masque.Core.Tables;
 
 namespace Masque.Csv;
 
@@ -59,6 +60,26 @@ public static class CsvTable
         return new CsvSample(headers, samples, parser.Delimiter, hasBom);
     }
 
+    /// <summary>Reads the whole file as a table named after the file, for loading into a query database.</summary>
+    /// <param name="path">The CSV file.</param>
+    /// <returns>The header row and every data row, as written.</returns>
+    /// <exception cref="CsvTableException">The file is empty or badly quoted.</exception>
+    public static TableData ReadTable(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        using var parser = CreateParser(path);
+        var headers = ReadHeaders(parser);
+
+        var rows = new List<IReadOnlyList<string?>>();
+        while (Read(parser))
+        {
+            rows.Add([.. parser.Record!]);
+        }
+
+        return new TableData(Path.GetFileNameWithoutExtension(path), headers, rows);
+    }
+
     /// <summary>
     /// Writes a copy of the file with every cell tokenized by its column's category. Cells beyond the header's
     /// width are masked as free text. The output appears only once it is complete.
@@ -69,7 +90,7 @@ public static class CsvTable
     /// <param name="tokenizer">Turns values into tokens.</param>
     /// <returns>The number of data rows written.</returns>
     /// <exception cref="CsvTableException">The file is empty or badly quoted.</exception>
-    public static int Mask(string inputPath, string outputPath, IReadOnlyList<PiiCategory> categories, Tokenizer tokenizer)
+    public static int Mask(string inputPath, string outputPath, IReadOnlyList<SensitiveDataType> categories, Tokenizer tokenizer)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(inputPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputPath);
@@ -105,7 +126,7 @@ public static class CsvTable
                     var record = parser.Record!;
                     for (var i = 0; i < record.Length; i++)
                     {
-                        var category = i < categories.Count ? categories[i] : PiiCategory.FreeText;
+                        var category = i < categories.Count ? categories[i] : SensitiveDataType.FreeText;
                         csv.WriteField(tokenizer.Tokenize(category, record[i]));
                     }
 

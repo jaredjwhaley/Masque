@@ -1,3 +1,5 @@
+using Masque.Core;
+
 namespace Masque.Cli;
 
 /// <summary>Process exit codes, so scripts and AI assistants can tell outcomes apart.</summary>
@@ -14,20 +16,6 @@ public static class ExitCodes
 
     /// <summary>The command line was wrong.</summary>
     public const int Usage = 64;
-}
-
-/// <summary>Where Masque keeps its files by default: under the user's local app data folder.</summary>
-public static class MasquePaths
-{
-    /// <summary>The per-user Masque folder.</summary>
-    public static readonly string Root =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Masque");
-
-    /// <summary>Default vault file.</summary>
-    public static readonly string DefaultVault = Path.Combine(Root, "vault.db");
-
-    /// <summary>Default folder of saved column configs.</summary>
-    public static readonly string DefaultConfigs = Path.Combine(Root, "configs");
 }
 
 /// <summary>Parsed command-line options.</summary>

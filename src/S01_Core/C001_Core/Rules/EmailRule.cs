@@ -7,7 +7,7 @@ namespace Masque.Core.Rules;
 public sealed class EmailRule : ITokenRule
 {
     /// <inheritdoc />
-    public PiiCategory Category => PiiCategory.Email;
+    public SensitiveDataType Category => SensitiveDataType.Email;
 
     /// <inheritdoc />
     public TokenRuleKind Kind => TokenRuleKind.Vaulted;

@@ -7,7 +7,7 @@ namespace Masque.Core.Rules;
 public sealed class SsnRule : ITokenRule
 {
     /// <inheritdoc />
-    public PiiCategory Category => PiiCategory.Ssn;
+    public SensitiveDataType Category => SensitiveDataType.Ssn;
 
     /// <inheritdoc />
     public TokenRuleKind Kind => TokenRuleKind.Vaulted;

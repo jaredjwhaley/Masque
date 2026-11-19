@@ -37,13 +37,13 @@ public sealed class MaskConfigTests : IDisposable
     public void Store_SaveThenLoad_RoundTrips()
     {
         var store = new ConfigStore(_folder);
-        var config = new MaskConfig("abc123", Confirmed: true,
-            [new ColumnRule("SSN", PiiCategory.Ssn, "header"), new ColumnRule("Pay", PiiCategory.Money, "header")]);
+        var config = new MaskConfig("abc123", ReviewedByPerson: true,
+            [new ColumnRule("SSN", SensitiveDataType.Ssn, "header"), new ColumnRule("Pay", SensitiveDataType.Money, "header")]);
 
         store.Save(config);
 
         var loaded = store.Load("abc123").ShouldNotBeNull();
-        loaded.Confirmed.ShouldBeTrue();
+        loaded.ReviewedByPerson.ShouldBeTrue();
         loaded.Columns.ShouldBe(config.Columns);
     }
 
@@ -57,7 +57,7 @@ public sealed class MaskConfigTests : IDisposable
     public void Store_WritesCategoriesByName_SoPeopleCanEditThem()
     {
         var store = new ConfigStore(_folder);
-        store.Save(new MaskConfig("abc123", Confirmed: false, [new ColumnRule("SSN", PiiCategory.Ssn, "header")]));
+        store.Save(new MaskConfig("abc123", ReviewedByPerson: false, [new ColumnRule("SSN", SensitiveDataType.Ssn, "header")]));
 
         File.ReadAllText(store.PathFor("abc123")).ShouldContain("\"Ssn\"");
     }
@@ -65,9 +65,9 @@ public sealed class MaskConfigTests : IDisposable
     [Fact]
     public void CategoryFor_MatchesHeadersLikeTheFingerprint_AndFailsClosed()
     {
-        var config = new MaskConfig("x", Confirmed: true, [new ColumnRule("First Name", PiiCategory.Name, "header")]);
+        var config = new MaskConfig("x", ReviewedByPerson: true, [new ColumnRule("First Name", SensitiveDataType.Name, "header")]);
 
-        config.CategoryFor("first_name").ShouldBe(PiiCategory.Name);
-        config.CategoryFor("unknown").ShouldBe(PiiCategory.FreeText);
+        config.CategoryFor("first_name").ShouldBe(SensitiveDataType.Name);
+        config.CategoryFor("unknown").ShouldBe(SensitiveDataType.FreeText);
     }
 }

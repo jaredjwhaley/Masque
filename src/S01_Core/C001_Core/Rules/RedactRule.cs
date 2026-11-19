@@ -5,10 +5,10 @@ namespace Masque.Core.Rules;
 /// without a specific rule, so unknown data is hidden rather than passed through.
 /// </summary>
 /// <param name="category">The category to redact.</param>
-public sealed class RedactRule(PiiCategory category) : ITokenRule
+public sealed class RedactRule(SensitiveDataType category) : ITokenRule
 {
     /// <inheritdoc />
-    public PiiCategory Category { get; } = category;
+    public SensitiveDataType Category { get; } = category;
 
     /// <inheritdoc />
     public TokenRuleKind Kind => TokenRuleKind.Vaulted;

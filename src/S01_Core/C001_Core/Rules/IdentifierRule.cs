@@ -9,7 +9,7 @@ namespace Masque.Core.Rules;
 public sealed class IdentifierRule : ITokenRule
 {
     /// <inheritdoc />
-    public PiiCategory Category => PiiCategory.Identifier;
+    public SensitiveDataType Category => SensitiveDataType.Identifier;
 
     /// <inheritdoc />
     public TokenRuleKind Kind => TokenRuleKind.Vaulted;

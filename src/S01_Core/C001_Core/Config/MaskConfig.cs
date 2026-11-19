@@ -29,24 +29,24 @@ public static class SchemaFingerprint
 /// <param name="Header">The column header as it appeared.</param>
 /// <param name="Category">The category to tokenize it as. People may edit this.</param>
 /// <param name="Reason">Why it was chosen; never quotes a value.</param>
-public sealed record ColumnRule(string Header, PiiCategory Category, string Reason);
+public sealed record ColumnRule(string Header, SensitiveDataType Category, string Reason);
 
 /// <summary>
 /// The saved categories for one file shape. It holds headers and categories only, never values, so it is safe
 /// to show an AI assistant. A config must be confirmed by a person before Masque uses it.
 /// </summary>
 /// <param name="Fingerprint">The <see cref="SchemaFingerprint"/> of the headers.</param>
-/// <param name="Confirmed">Whether a person has reviewed and accepted it.</param>
+/// <param name="ReviewedByPerson">Whether a person has reviewed and accepted it.</param>
 /// <param name="Columns">One rule per column.</param>
-public sealed record MaskConfig(string Fingerprint, bool Confirmed, IReadOnlyList<ColumnRule> Columns)
+public sealed record MaskConfig(string Fingerprint, bool ReviewedByPerson, IReadOnlyList<ColumnRule> Columns)
 {
     /// <summary>The category for a header, matched the same way as the fingerprint. Unknown headers fail closed.</summary>
     /// <param name="header">A column header.</param>
-    /// <returns>The saved category, or <see cref="PiiCategory.FreeText"/> when the header isn't in the config.</returns>
-    public PiiCategory CategoryFor(string header)
+    /// <returns>The saved category, or <see cref="SensitiveDataType.FreeText"/> when the header isn't in the config.</returns>
+    public SensitiveDataType CategoryFor(string header)
     {
         var normalized = HeaderText.Normalize(header);
-        return Columns.FirstOrDefault(c => HeaderText.Normalize(c.Header) == normalized)?.Category ?? PiiCategory.FreeText;
+        return Columns.FirstOrDefault(c => HeaderText.Normalize(c.Header) == normalized)?.Category ?? SensitiveDataType.FreeText;
     }
 }
 

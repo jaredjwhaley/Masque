@@ -8,22 +8,23 @@ namespace Masque.Core.Vault;
 /// </summary>
 public sealed class InMemoryTokenVault : ITokenVault
 {
-    private readonly Dictionary<(PiiCategory, string), string> _tokensByValue = [];
-    private readonly Dictionary<(PiiCategory, string), string> _valuesByToken = [];
+    private readonly Dictionary<(SensitiveDataType, string), string> _tokensByValue = [];
+    private readonly Dictionary<(SensitiveDataType, string), string> _valuesByToken = [];
+    private readonly Dictionary<(SensitiveDataType, string), HashSet<string>> _spellingsByToken = [];
 
     /// <inheritdoc />
-    public bool TryGetToken(PiiCategory category, string normalizedValue, [NotNullWhen(true)] out string? token) =>
+    public bool TryGetToken(SensitiveDataType category, string normalizedValue, [NotNullWhen(true)] out string? token) =>
         _tokensByValue.TryGetValue((category, normalizedValue), out token);
 
     /// <inheritdoc />
-    public bool TryGetOriginal(PiiCategory category, string token, [NotNullWhen(true)] out string? normalizedValue) =>
+    public bool TryGetOriginal(SensitiveDataType category, string token, [NotNullWhen(true)] out string? normalizedValue) =>
         _valuesByToken.TryGetValue((category, token), out normalizedValue);
 
     /// <inheritdoc />
-    public bool ContainsToken(PiiCategory category, string token) => _valuesByToken.ContainsKey((category, token));
+    public bool ContainsToken(SensitiveDataType category, string token) => _valuesByToken.ContainsKey((category, token));
 
     /// <inheritdoc />
-    public void Add(PiiCategory category, string normalizedValue, string token)
+    public void Add(SensitiveDataType category, string normalizedValue, string token)
     {
         ArgumentNullException.ThrowIfNull(normalizedValue);
         ArgumentNullException.ThrowIfNull(token);
@@ -42,4 +43,28 @@ public sealed class InMemoryTokenVault : ITokenVault
         _tokensByValue.Add((category, normalizedValue), token);
         _valuesByToken.Add((category, token), normalizedValue);
     }
+
+    /// <inheritdoc />
+    public void AddSpelling(SensitiveDataType category, string token, string spelling)
+    {
+        ArgumentNullException.ThrowIfNull(token);
+        ArgumentNullException.ThrowIfNull(spelling);
+
+        if (!ContainsToken(category, token))
+        {
+            throw new InvalidOperationException($"This {category} token isn't in the vault, so it can't have spellings.");
+        }
+
+        if (!_spellingsByToken.TryGetValue((category, token), out var spellings))
+        {
+            spellings = new HashSet<string>(StringComparer.Ordinal);
+            _spellingsByToken.Add((category, token), spellings);
+        }
+
+        spellings.Add(spelling);
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyCollection<string> GetSpellings(SensitiveDataType category, string token) =>
+        _spellingsByToken.TryGetValue((category, token), out var spellings) ? [.. spellings] : [];
 }

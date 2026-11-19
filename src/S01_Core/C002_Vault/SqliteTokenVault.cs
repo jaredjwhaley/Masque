@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
+using System.Text;
 using Masque.Core;
 using Masque.Core.Vault;
 using Microsoft.Data.Sqlite;
@@ -8,14 +9,16 @@ namespace Masque.Vault;
 
 /// <summary>
 /// A token vault in a local SQLite file. Real values are never stored in readable form: each row holds a keyed
-/// hash of the value (for lookup), the value encrypted with AES-GCM (for reveal) and the token. The vault's
+/// hash of the value (for lookup), the value encrypted with AES-GCM (for reveal) and the token; recorded spellings
+/// are stored the same way. The vault's
 /// random master key is stored wrapped by an <see cref="IKeyProtector"/> (the OS secret store), so the file is
 /// useless to anyone but the user who created it. Not thread-safe; keep one instance per process.
 /// </summary>
 public sealed class SqliteTokenVault : ITokenVault, IDisposable
 {
     /// <summary>Schema version written to new vaults. Newer vaults are refused rather than misread.</summary>
-    public const int SchemaVersion = 1;
+    /// <remarks>Version 2 added the spellings table; version 1 vaults are upgraded in place when opened.</remarks>
+    public const int SchemaVersion = 2;
 
     private const int SqliteConstraintError = 19;
 
@@ -66,7 +69,7 @@ public sealed class SqliteTokenVault : ITokenVault, IDisposable
     }
 
     /// <inheritdoc />
-    public bool TryGetToken(PiiCategory category, string normalizedValue, [NotNullWhen(true)] out string? token)
+    public bool TryGetToken(SensitiveDataType category, string normalizedValue, [NotNullWhen(true)] out string? token)
     {
         using var command = _connection.CreateCommand();
         command.CommandText = "SELECT token FROM tokens WHERE category = $category AND value_index = $index;";
@@ -78,7 +81,7 @@ public sealed class SqliteTokenVault : ITokenVault, IDisposable
     }
 
     /// <inheritdoc />
-    public bool TryGetOriginal(PiiCategory category, string token, [NotNullWhen(true)] out string? normalizedValue)
+    public bool TryGetOriginal(SensitiveDataType category, string token, [NotNullWhen(true)] out string? normalizedValue)
     {
         using var command = _connection.CreateCommand();
         command.CommandText = "SELECT value_index, value_cipher FROM tokens WHERE category = $category AND token = $token;";
@@ -97,7 +100,7 @@ public sealed class SqliteTokenVault : ITokenVault, IDisposable
     }
 
     /// <inheritdoc />
-    public bool ContainsToken(PiiCategory category, string token)
+    public bool ContainsToken(SensitiveDataType category, string token)
     {
         using var command = _connection.CreateCommand();
         command.CommandText = "SELECT 1 FROM tokens WHERE category = $category AND token = $token;";
@@ -108,7 +111,7 @@ public sealed class SqliteTokenVault : ITokenVault, IDisposable
     }
 
     /// <inheritdoc />
-    public void Add(PiiCategory category, string normalizedValue, string token)
+    public void Add(SensitiveDataType category, string normalizedValue, string token)
     {
         ArgumentNullException.ThrowIfNull(normalizedValue);
         ArgumentNullException.ThrowIfNull(token);
@@ -137,6 +140,55 @@ public sealed class SqliteTokenVault : ITokenVault, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Stored like values: a keyed hash for finding duplicates and the spelling encrypted with AES-GCM. The encryption
+    /// is bound to the token as well as the hash, so a row moved to another token fails to decrypt instead of making
+    /// that token match someone else's value.
+    /// </remarks>
+    public void AddSpelling(SensitiveDataType category, string token, string spelling)
+    {
+        ArgumentNullException.ThrowIfNull(token);
+        ArgumentNullException.ThrowIfNull(spelling);
+
+        var index = _crypto.Index(category, $"{token}\u001F{spelling}");
+
+        using var command = _connection.CreateCommand();
+        command.CommandText = """
+            INSERT OR IGNORE INTO spellings (category, token, spelling_index, spelling_cipher)
+            SELECT $category, $token, $index, $cipher
+            WHERE EXISTS (SELECT 1 FROM tokens WHERE category = $category AND token = $token);
+            """;
+        command.Parameters.AddWithValue("$category", category.ToString());
+        command.Parameters.AddWithValue("$token", token);
+        command.Parameters.AddWithValue("$index", index);
+        command.Parameters.AddWithValue("$cipher", _crypto.Encrypt(spelling, SpellingBinding(index, token)));
+
+        // No row is written both for a spelling already held (fine) and for an unknown token (a caller error).
+        if (command.ExecuteNonQuery() == 0 && !ContainsToken(category, token))
+        {
+            throw new InvalidOperationException($"This {category} token isn't in the vault, so it can't have spellings.");
+        }
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyCollection<string> GetSpellings(SensitiveDataType category, string token)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT spelling_index, spelling_cipher FROM spellings WHERE category = $category AND token = $token;";
+        command.Parameters.AddWithValue("$category", category.ToString());
+        command.Parameters.AddWithValue("$token", token);
+
+        var spellings = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            spellings.Add(_crypto.Decrypt((byte[])reader["spelling_cipher"], SpellingBinding((byte[])reader["spelling_index"], token)));
+        }
+
+        return spellings;
+    }
+
     /// <summary>Closes the file and wipes the vault's keys from memory.</summary>
     public void Dispose()
     {
@@ -160,6 +212,9 @@ public sealed class SqliteTokenVault : ITokenVault, IDisposable
 
         return indexes;
     }
+
+    /// <summary>The bytes a spelling's encryption is bound to: its hash, then its token.</summary>
+    private static byte[] SpellingBinding(byte[] index, string token) => [.. index, .. Encoding.UTF8.GetBytes(token)];
 
     /// <summary>Opens a connection without pooling, so disposing the vault releases the file at once.</summary>
     private static SqliteConnection OpenConnection(string path, SqliteOpenMode mode)
@@ -194,6 +249,13 @@ public sealed class SqliteTokenVault : ITokenVault, IDisposable
                 PRIMARY KEY (category, value_index),
                 UNIQUE (category, token));
 
+            CREATE TABLE IF NOT EXISTS spellings (
+                category        TEXT NOT NULL,
+                token           TEXT NOT NULL,
+                spelling_index  BLOB NOT NULL,
+                spelling_cipher BLOB NOT NULL,
+                PRIMARY KEY (category, token, spelling_index));
+
             INSERT OR IGNORE INTO meta (name, value) VALUES ('schema_version', {SchemaVersion});
             """;
         create.ExecuteNonQuery();
@@ -205,6 +267,14 @@ public sealed class SqliteTokenVault : ITokenVault, IDisposable
         {
             throw new VaultAccessException(
                 $"This vault was made by a newer version of Masque (schema {version}); update Masque to open it.");
+        }
+
+        if (version < SchemaVersion)
+        {
+            // Version 1 lacked only the spellings table, created above; its tokens simply have no spellings yet.
+            using var upgrade = connection.CreateCommand();
+            upgrade.CommandText = $"UPDATE meta SET value = {SchemaVersion} WHERE name = 'schema_version';";
+            upgrade.ExecuteNonQuery();
         }
     }
 

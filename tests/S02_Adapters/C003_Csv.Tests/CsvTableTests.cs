@@ -82,7 +82,7 @@ public sealed class CsvTableTests : IDisposable
     {
         var path = WriteInput("SSN,Pay\n123-45-6789,\"1,234.56\"\n");
 
-        CsvTable.Mask(path, OutputPath, [PiiCategory.Ssn, PiiCategory.Money], _tokenizer).ShouldBe(1);
+        CsvTable.Mask(path, OutputPath, [SensitiveDataType.Ssn, SensitiveDataType.Money], _tokenizer).ShouldBe(1);
 
         var rows = ReadBack(OutputPath);
         rows[0].ShouldBe(["SSN", "Pay"]);
@@ -95,7 +95,7 @@ public sealed class CsvTableTests : IDisposable
     {
         var path = WriteInput("SSN\n123-45-6789\n123456789\n");
 
-        CsvTable.Mask(path, OutputPath, [PiiCategory.Ssn], _tokenizer);
+        CsvTable.Mask(path, OutputPath, [SensitiveDataType.Ssn], _tokenizer);
 
         var rows = ReadBack(OutputPath);
         rows[2][0].ShouldBe(rows[1][0]);
@@ -106,7 +106,7 @@ public sealed class CsvTableTests : IDisposable
     {
         var path = WriteInput("Code,Notes\n\"A,B\",\"line one\nline two\"\n");
 
-        CsvTable.Mask(path, OutputPath, [PiiCategory.Code, PiiCategory.FreeText], _tokenizer);
+        CsvTable.Mask(path, OutputPath, [SensitiveDataType.Code, SensitiveDataType.FreeText], _tokenizer);
 
         var rows = ReadBack(OutputPath);
         rows.Count.ShouldBe(2);
@@ -119,7 +119,7 @@ public sealed class CsvTableTests : IDisposable
     {
         var path = WriteInput("Code\nA,leaked value\n");
 
-        CsvTable.Mask(path, OutputPath, [PiiCategory.Code], _tokenizer);
+        CsvTable.Mask(path, OutputPath, [SensitiveDataType.Code], _tokenizer);
 
         File.ReadAllText(OutputPath).ShouldNotContain("leaked value");
     }
@@ -129,7 +129,7 @@ public sealed class CsvTableTests : IDisposable
     {
         var path = WriteInput("Code;Pay\nA;10.00\n");
 
-        CsvTable.Mask(path, OutputPath, [PiiCategory.Code, PiiCategory.Money], _tokenizer);
+        CsvTable.Mask(path, OutputPath, [SensitiveDataType.Code, SensitiveDataType.Money], _tokenizer);
 
         ReadBack(OutputPath, ';')[1].ShouldBe(["A", "10.00"]);
     }
@@ -141,7 +141,7 @@ public sealed class CsvTableTests : IDisposable
     {
         var path = WriteInput("Code\nA\n", bom);
 
-        CsvTable.Mask(path, OutputPath, [PiiCategory.Code], _tokenizer);
+        CsvTable.Mask(path, OutputPath, [SensitiveDataType.Code], _tokenizer);
 
         var bytes = File.ReadAllBytes(OutputPath);
         bytes.AsSpan().StartsWith(Encoding.UTF8.Preamble).ShouldBe(bom);
@@ -152,7 +152,7 @@ public sealed class CsvTableTests : IDisposable
     {
         var path = WriteInput("Name\nPat \"Secret\" Smith\n");
 
-        var error = Should.Throw<CsvTableException>(() => CsvTable.Mask(path, OutputPath, [PiiCategory.Name], _tokenizer));
+        var error = Should.Throw<CsvTableException>(() => CsvTable.Mask(path, OutputPath, [SensitiveDataType.Name], _tokenizer));
 
         error.Message.ShouldContain("row 2");
         error.Message.ShouldNotContain("Secret");

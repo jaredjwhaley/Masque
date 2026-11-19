@@ -39,7 +39,7 @@ internal sealed class VaultCrypto : IDisposable
     /// Keyed hash of a value, used as its lookup key. Without the vault key it can't be reversed or
     /// guessed, even for values with few possibilities such as SSNs.
     /// </summary>
-    public byte[] Index(PiiCategory category, string normalizedValue) =>
+    public byte[] Index(SensitiveDataType category, string normalizedValue) =>
         HMACSHA256.HashData(_indexKey, Encoding.UTF8.GetBytes($"{category}\u001F{normalizedValue}"));
 
     /// <summary>Encrypts a value. Output layout: nonce, then tag, then ciphertext.</summary>

@@ -1,3 +1,5 @@
+using Masque.Core;
+
 namespace Masque.Cli.Tests;
 
 public class CliOptionsTests

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>Masque.SqlServer</AssemblyName>
+    <RootNamespace>Masque.SqlServer</RootNamespace>
+    <Description>SQL Server query source for Masque: runs read-only queries in a rolled-back transaction and reports column lineage.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.1.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\S01_Core\C001_Core\C001_Core.csproj" />
+    <ProjectReference Include="..\..\S01_Core\C009_Data\C009_Data.csproj" />
+  </ItemGroup>
+
+</Project>

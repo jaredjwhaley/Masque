@@ -52,7 +52,7 @@ public sealed class MasqueCliTests : IDisposable
 
         File.Exists(CliOptions.DefaultOutputPath(input)).ShouldBeFalse();
         var config = new ConfigStore(ConfigFolder).Load(SchemaFingerprint.Compute(["SSN", "FirstName", "Email", "GrossPay", "Status", "Notes"]));
-        config.ShouldNotBeNull().Confirmed.ShouldBeFalse();
+        config.ShouldNotBeNull().ReviewedByPerson.ShouldBeFalse();
         _out.ToString().ShouldContain("SSN");
         _out.ToString().ShouldContain("--accept");
     }
@@ -120,7 +120,7 @@ public sealed class MasqueCliTests : IDisposable
         var store = new ConfigStore(ConfigFolder);
         var path = store.PathFor(SchemaFingerprint.Compute(["Notes"]));
         var json = JsonNode.Parse(File.ReadAllText(path))!;
-        json["columns"]![0]!["category"] = nameof(PiiCategory.Safe);
+        json["columns"]![0]!["category"] = nameof(SensitiveDataType.Safe);
         File.WriteAllText(path, json.ToJsonString());
 
         Run(input, "--accept").ShouldBe(ExitCodes.Success);

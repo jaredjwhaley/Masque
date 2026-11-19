@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>Masque.Sqlite</AssemblyName>
+    <RootNamespace>Masque.Sqlite</RootNamespace>
+    <Description>SQLite query source for Masque: queries SQLite databases, or CSV and Excel tables loaded into a private in-memory database, read-only and with column lineage.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.14" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\S01_Core\C001_Core\C001_Core.csproj" />
+    <ProjectReference Include="..\..\S01_Core\C009_Data\C009_Data.csproj" />
+  </ItemGroup>
+
+</Project>

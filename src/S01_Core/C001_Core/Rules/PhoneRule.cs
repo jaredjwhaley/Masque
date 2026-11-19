@@ -7,7 +7,7 @@ namespace Masque.Core.Rules;
 public sealed class PhoneRule : ITokenRule
 {
     /// <inheritdoc />
-    public PiiCategory Category => PiiCategory.Phone;
+    public SensitiveDataType Category => SensitiveDataType.Phone;
 
     /// <inheritdoc />
     public TokenRuleKind Kind => TokenRuleKind.Vaulted;
