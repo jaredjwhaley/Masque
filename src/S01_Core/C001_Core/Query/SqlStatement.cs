@@ -25,19 +25,31 @@ public sealed record TableReference(string? Schema, string Name)
     public string Qualified => Schema is null ? Name : $"{Schema}.{Name}";
 }
 
+/// <summary>Where a token filter's value comes from.</summary>
+public enum TokenFilterKind
+{
+    /// <summary>A string literal written in the SQL.</summary>
+    Literal,
+
+    /// <summary>A named parameter (<c>@x</c>, <c>:x</c>, <c>$x</c>), whose value is on the command.</summary>
+    Parameter,
+}
+
 /// <summary>
-/// A string literal compared with a masked column. If it is a token Masque issued, it stands for the real value,
-/// so the caller can filter on a token they were shown.
+/// A string literal or named parameter compared with a masked column. If its value is a token Masque issued, it
+/// stands for the real value, so the caller can filter on a token they were shown.
 /// </summary>
-/// <param name="Literal">The literal's value, without quotes.</param>
+/// <param name="Text">The literal's value without quotes, or the parameter's name as written (with its prefix).</param>
+/// <param name="Kind">Whether <paramref name="Text"/> is a literal value or a parameter name.</param>
 /// <param name="Type">The masked column's type, which says which vault entries the token could match.</param>
-/// <param name="Start">Where the literal starts in the SQL, including its quote (or <c>N</c> prefix).</param>
-/// <param name="Length">How many characters the literal covers in the SQL.</param>
+/// <param name="Start">Where the literal or parameter starts in the SQL, including a literal's quote (or <c>N</c> prefix).</param>
+/// <param name="Length">How many characters it covers in the SQL.</param>
 /// <param name="Comparison">
-/// The condition when the literal is one side of <c>=</c> or <c>&lt;&gt;</c>; null when it is an item in an
+/// The condition when the value is one side of <c>=</c> or <c>&lt;&gt;</c>; null when it is an item in an
 /// <c>IN (...)</c> list.
 /// </param>
-public sealed record TokenFilter(string Literal, SensitiveDataType Type, int Start, int Length, TokenComparison? Comparison);
+public sealed record TokenFilter(
+    string Text, TokenFilterKind Kind, SensitiveDataType Type, int Start, int Length, TokenComparison? Comparison);
 
 /// <summary>
 /// A whole <c>column = literal</c> or <c>literal &lt;&gt; column</c> condition holding a token filter. A token can

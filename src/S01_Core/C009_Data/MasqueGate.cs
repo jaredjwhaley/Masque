@@ -115,12 +115,43 @@ public sealed class MasqueGate : IDisposable
             return wrapped;
         }
 
+        return new MaskingDbConnection(this, connection, Attach(connection), CurrentGrant(allowRaw));
+    }
+
+    /// <summary>Starts Masque's record of a raw connection, using the dialect that handles it.</summary>
+    /// <param name="connection">The raw connection, open or not.</param>
+    /// <returns>A new session for the connection.</returns>
+    /// <exception cref="NotSupportedException">No dialect handles this kind of connection.</exception>
+    internal MasqueSession Attach(DbConnection connection)
+    {
         var dialect = _dialects.FirstOrDefault(d => d.Supports(connection))
             ?? throw new NotSupportedException(
                 $"Masque has no dialect for {connection.GetType().Name}. Add one to MasqueOptions.Dialects (for example, new SqliteDialect()).");
 
-        var grant = _policy.GrantFor(_caller.Current()).Narrow(allowRaw);
-        return new MaskingDbConnection(this, connection, new MasqueSession(connection, dialect), grant);
+        return new MasqueSession(connection, dialect);
+    }
+
+    /// <summary>What the current caller may see raw and whether they may write, narrowed by <paramref name="allowRaw"/>.</summary>
+    /// <param name="allowRaw">Raw types to allow; narrows the caller's policy and never widens it. Null keeps the policy.</param>
+    /// <returns>The grant.</returns>
+    internal AccessGrant CurrentGrant(IEnumerable<SensitiveDataType>? allowRaw) => _policy.GrantFor(_caller.Current()).Narrow(allowRaw);
+
+    /// <summary>
+    /// The columns of one table that are masked for a caller, by column name: sensitive in the table's reviewed
+    /// config and not shown raw by the grant. Used to stop writes that would change a value the caller can't see.
+    /// </summary>
+    /// <param name="session">The connection's session; the connection must be open.</param>
+    /// <param name="table">The table, as an ORM or statement names it.</param>
+    /// <param name="grant">What the caller may see raw.</param>
+    /// <returns>Masked column names (case-insensitive) with their types.</returns>
+    /// <exception cref="QueryRejectedException">The database doesn't list the table.</exception>
+    /// <exception cref="ReviewRequiredException">The table's config still needs a person's review.</exception>
+    internal IReadOnlyDictionary<string, SensitiveDataType> ProtectedColumns(MasqueSession session, TableReference table, AccessGrant grant)
+    {
+        var pending = new List<TableConfig>();
+        var masked = new Dictionary<string, SensitiveDataType>(StringComparer.OrdinalIgnoreCase);
+        AddMaskedColumns(masked, table, session, grant, pending);
+        return pending.Count > 0 ? throw new ReviewRequiredException(pending) : masked;
     }
 
     /// <summary>
@@ -226,26 +257,36 @@ public sealed class MasqueGate : IDisposable
 
         foreach (var named in statement.Tables)
         {
-            var table = session.FindListed(named) ?? throw new QueryRejectedException(
-                $"{named.Qualified} isn't a table Masque can read: the database doesn't list it as a user table or view.");
-
-            var config = _reviewer.Reviewed(session, table, pending);
-            if (config is null)
-            {
-                continue;
-            }
-
-            foreach (var rule in config.Columns.Where(r => r.Category.IsSensitive() && !grant.Shows(r.Category)))
-            {
-                // The same column name with different types in two tables: free text covers either, and tokens of
-                // either type can't be resolved by mistake.
-                masked[rule.Header] = masked.TryGetValue(rule.Header, out var existing) && existing != rule.Category
-                    ? SensitiveDataType.FreeText
-                    : rule.Category;
-            }
+            AddMaskedColumns(masked, named, session, grant, pending);
         }
 
         return pending.Count > 0 ? throw new ReviewRequiredException(pending) : masked;
+    }
+
+    /// <summary>
+    /// Adds one table's masked columns to <paramref name="masked"/>, or the table's config to
+    /// <paramref name="pending"/> when it still needs review.
+    /// </summary>
+    private void AddMaskedColumns(
+        Dictionary<string, SensitiveDataType> masked, TableReference named, MasqueSession session, AccessGrant grant, List<TableConfig> pending)
+    {
+        var table = session.FindListed(named) ?? throw new QueryRejectedException(
+            $"{named.Qualified} isn't a table Masque can read: the database doesn't list it as a user table or view.");
+
+        var config = _reviewer.Reviewed(session, table, pending);
+        if (config is null)
+        {
+            return;
+        }
+
+        foreach (var rule in config.Columns.Where(r => r.Category.IsSensitive() && !grant.Shows(r.Category)))
+        {
+            // The same column name with different types in two tables: free text covers either, and tokens of
+            // either type can't be resolved by mistake.
+            masked[rule.Header] = masked.TryGetValue(rule.Header, out var existing) && existing != rule.Category
+                ? SensitiveDataType.FreeText
+                : rule.Category;
+        }
     }
 
     /// <summary>
@@ -260,7 +301,8 @@ public sealed class MasqueGate : IDisposable
         var added = new List<DbParameter>();
         foreach (var filter in review.TokenFilters.OrderByDescending(f => f.Comparison?.Start ?? f.Start))
         {
-            if (!_masker.TryResolve(filter.Type, filter.Literal, out var values))
+            var candidate = filter.Kind == TokenFilterKind.Literal ? filter.Text : ParameterText(inner, filter.Text);
+            if (candidate is null || !_masker.TryResolve(filter.Type, candidate, out var values))
             {
                 continue;
             }
@@ -277,6 +319,28 @@ public sealed class MasqueGate : IDisposable
         }
 
         return (text, added);
+    }
+
+    /// <summary>
+    /// The string value of the parameter a filter names, or null when the command has no such parameter or its value
+    /// isn't a string (only strings can be tokens). Providers differ on whether a stored name keeps its prefix
+    /// (<c>@</c>, <c>:</c>, <c>$</c>), so both forms are tried.
+    /// </summary>
+    private static string? ParameterText(DbCommand inner, string nameInSql)
+    {
+        var bare = nameInSql[1..];
+        string[] candidates = [nameInSql, bare, $"@{bare}", $":{bare}", $"${bare}"];
+
+        foreach (var name in candidates)
+        {
+            var index = inner.Parameters.IndexOf(name);
+            if (index >= 0)
+            {
+                return inner.Parameters[index].Value as string;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Adds one string parameter for a token filter and returns its name.</summary>

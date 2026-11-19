@@ -230,7 +230,7 @@ public class SqlStatementTests
 
         var filters = Review(sql).TokenFilters;
 
-        filters.Select(f => (f.Literal, f.Type)).ShouldBe(
+        filters.Select(f => (f.Text, f.Type)).ShouldBe(
         [
             ("900-11-2222", SensitiveDataType.Ssn),
             ("Avery Brooks", SensitiveDataType.Name),
@@ -260,6 +260,29 @@ public class SqlStatementTests
         sql.Substring(name.Start, name.Length).ShouldBe("'Avery Brooks' <> [Name]");
         sql.Substring(name.ColumnStart, name.ColumnLength).ShouldBe("[Name]");
         name.Negated.ShouldBeTrue();
+    }
+
+    /// <summary>
+    /// Named parameters compared with a masked column are reported too, since EF Core and Dapper pass values that way;
+    /// the gate checks each one's value for a token. Positional <c>?</c> parameters have no name to look up, so they
+    /// are not reported. String literals are reported as literals.
+    /// </summary>
+    [Fact]
+    public void Review_NamedParameters_AreTokenFilterCandidates()
+    {
+        const string sql = "SELECT * FROM People WHERE SSN = @ssn AND Name IN (:a, $b) AND SSN <> ? AND Name = 'Lee Kim' AND Status = @s";
+
+        var filters = Review(sql).TokenFilters;
+
+        filters.Select(f => (f.Text, f.Kind, f.Type)).ShouldBe(
+        [
+            ("@ssn", TokenFilterKind.Parameter, SensitiveDataType.Ssn),
+            (":a", TokenFilterKind.Parameter, SensitiveDataType.Name),
+            ("$b", TokenFilterKind.Parameter, SensitiveDataType.Name),
+            ("Lee Kim", TokenFilterKind.Literal, SensitiveDataType.Name),
+        ]);
+        filters[0].Comparison.ShouldNotBeNull();
+        filters[1].Comparison.ShouldBeNull();
     }
 
     /// <summary>A literal in an IN list has no comparison of its own: the gate swaps it for a list of values in place.</summary>

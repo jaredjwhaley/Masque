@@ -253,6 +253,32 @@ public sealed class MaskingConnectionTests
         Scalar(connection, $"SELECT Id FROM Orders WHERE PersonSsn = '{token}'").ShouldBe(10L);
     }
 
+    /// <summary>
+    /// A token passed in a named parameter filters like a literal one, in = comparisons and IN lists, and the
+    /// caller's parameters are left as they were after the command runs.
+    /// </summary>
+    [Fact]
+    public void Token_in_a_parameter_filters_like_a_literal()
+    {
+        using var harness = Create();
+        using var connection = harness.Gate().Wrap(harness.Inner);
+        var token = (string)Scalar(connection, "SELECT Ssn FROM People WHERE Id = 1")!;
+
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Id FROM People WHERE Ssn = @ssn";
+        var parameter = command.CreateParameter();
+        parameter.ParameterName = "@ssn";
+        parameter.Value = token;
+        command.Parameters.Add(parameter);
+
+        command.ExecuteScalar().ShouldBe(1L);
+        command.CommandText = "SELECT COUNT(*) FROM People WHERE Ssn IN (@ssn)";
+        command.ExecuteScalar().ShouldBe(1L);
+
+        command.Parameters.Count.ShouldBe(1);
+        command.Parameters[0].Value.ShouldBe(token);
+    }
+
     /// <summary>The command's text is unchanged after it runs, so a token filter never leaves a real value behind.</summary>
     [Fact]
     public void Token_filter_rewrite_is_undone_after_running()

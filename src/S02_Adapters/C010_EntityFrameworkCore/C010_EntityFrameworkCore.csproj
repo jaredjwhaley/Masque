@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>Masque.EntityFrameworkCore</AssemblyName>
+    <RootNamespace>Masque.EntityFrameworkCore</RootNamespace>
+    <Description>EF Core interceptors for Masque: register with UseMasque and LINQ queries come back with sensitive columns tokenized, while SaveChanges refuses to overwrite values the caller was only shown as tokens.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.14" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\S01_Core\C001_Core\C001_Core.csproj" />
+    <ProjectReference Include="..\..\S01_Core\C009_Data\C009_Data.csproj" />
+  </ItemGroup>
+
+</Project>

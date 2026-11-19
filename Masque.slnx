@@ -16,6 +16,7 @@
     <Project Path="src/S02_Adapters/C005_Excel/C005_Excel.csproj" />
     <Project Path="src/S02_Adapters/C006_Sqlite/C006_Sqlite.csproj" />
     <Project Path="src/S02_Adapters/C007_SqlServer/C007_SqlServer.csproj" />
+    <Project Path="src/S02_Adapters/C010_EntityFrameworkCore/C010_EntityFrameworkCore.csproj" />
   </Folder>
   <Folder Name="/src/S03_Tools/">
     <Project Path="src/S03_Tools/C004_Cli/C004_Cli.csproj" />
@@ -32,6 +33,7 @@
     <Project Path="tests/S02_Adapters/C005_Excel.Tests/C005_Excel.Tests.csproj" />
     <Project Path="tests/S02_Adapters/C006_Sqlite.Tests/C006_Sqlite.Tests.csproj" />
     <Project Path="tests/S02_Adapters/C007_SqlServer.Tests/C007_SqlServer.Tests.csproj" />
+    <Project Path="tests/S02_Adapters/C010_EntityFrameworkCore.Tests/C010_EntityFrameworkCore.Tests.csproj" />
   </Folder>
   <Folder Name="/tests/S03_Tools/">
     <Project Path="tests/S03_Tools/C004_Cli.Tests/C004_Cli.Tests.csproj" />

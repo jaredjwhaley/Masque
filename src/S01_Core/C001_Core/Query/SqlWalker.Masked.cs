@@ -291,14 +291,25 @@ internal sealed partial class SqlWalker
     }
 
     /// <summary>
-    /// Records the string literals among <paramref name="indexes"/> as token filters, with the equality condition
-    /// they belong to (null for IN-list items).
+    /// Records the string literals and named parameters among <paramref name="indexes"/> as token filters, with the
+    /// equality condition they belong to (null for IN-list items). Positional <c>?</c> parameters are skipped: they
+    /// have no name to find their value by.
     /// </summary>
     private void AddFilters(List<int> indexes, SensitiveDataType type, TokenComparison? comparison)
     {
-        foreach (var token in indexes.Select(i => _t[i]).Where(t => t.Kind == SqlTokenKind.String))
+        foreach (var token in indexes.Select(i => _t[i]))
         {
-            _filters.Add(new TokenFilter(token.Text, type, token.Start, token.Length, comparison));
+            var kind = token.Kind switch
+            {
+                SqlTokenKind.String => TokenFilterKind.Literal,
+                SqlTokenKind.Parameter when !token.Text.StartsWith('?') => TokenFilterKind.Parameter,
+                _ => (TokenFilterKind?)null,
+            };
+
+            if (kind is not null)
+            {
+                _filters.Add(new TokenFilter(token.Text, kind.Value, type, token.Start, token.Length, comparison));
+            }
         }
     }
 
