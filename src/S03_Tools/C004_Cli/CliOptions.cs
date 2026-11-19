@@ -21,7 +21,7 @@ public static class ExitCodes
 /// <summary>Parsed command-line options.</summary>
 /// <param name="InputPath">The CSV file to mask.</param>
 /// <param name="OutputPath">Where to write the masked copy; null means next to the input.</param>
-/// <param name="Accept">Confirm a proposed column config and continue.</param>
+/// <param name="Accept">Mark a proposed column config as reviewed by a person and continue.</param>
 /// <param name="VaultPath">The vault file.</param>
 /// <param name="ConfigFolder">The folder of saved column configs.</param>
 public sealed record CliOptions(string InputPath, string? OutputPath, bool Accept, string VaultPath, string ConfigFolder)
@@ -35,12 +35,12 @@ public sealed record CliOptions(string InputPath, string? OutputPath, bool Accep
         same token. No data value is ever printed.
 
         The first time Masque sees a new set of columns, it proposes a category for each
-        one and stops so you can review the saved config. Run again with --accept to
-        confirm it; files with the same columns then run without stopping.
+        one and stops so you can review the saved config. Run again with --accept once
+        you have reviewed it; files with the same columns then run without stopping.
 
         Options:
           --out <path>      Where to write the masked copy (default: <file>.masque.csv)
-          --accept          Confirm the proposed column categories and continue
+          --accept          Mark the proposed config as reviewed and continue
           --vault <path>    Token vault (default: {MasquePaths.DefaultVault})
           --configs <dir>   Saved column configs (default: {MasquePaths.DefaultConfigs})
           -h, --help        Show this help

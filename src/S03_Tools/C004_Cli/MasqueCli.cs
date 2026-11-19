@@ -95,7 +95,7 @@ public static class MasqueCli
 
             config = config with { ReviewedByPerson = true };
             store.Save(config);
-            output.WriteLine("Config confirmed; files with these columns will run without review from now on.");
+            output.WriteLine("Config saved as reviewed (reviewedByPerson: true); files with these columns run without stopping from now on.");
         }
 
         var outputPath = options.OutputPath ?? CliOptions.DefaultOutputPath(options.InputPath);
@@ -111,7 +111,7 @@ public static class MasqueCli
 
     private static void WritePlan(TextWriter output, string inputPath, string fingerprint, MaskConfig config)
     {
-        output.WriteLine($"Columns in {Path.GetFileName(inputPath)} (shape {fingerprint}, {(config.ReviewedByPerson ? "confirmed" : "proposed")}):");
+        output.WriteLine($"Columns in {Path.GetFileName(inputPath)} (shape {fingerprint}, {(config.ReviewedByPerson ? "reviewed" : "proposed")}):");
 
         var width = config.Columns.Count == 0 ? 0 : config.Columns.Max(c => c.Header.Length);
         foreach (var column in config.Columns)

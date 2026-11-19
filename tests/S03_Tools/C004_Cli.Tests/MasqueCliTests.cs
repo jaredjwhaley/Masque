@@ -75,11 +75,30 @@ public sealed class MasqueCliTests : IDisposable
     }
 
     [Fact]
-    public void ConfirmedShape_RunsWithoutAcceptNextTime()
+    public void ReviewedShape_RunsWithoutAcceptNextTime()
     {
         Run(StandardInput("one.csv"), "--accept");
 
         Run(StandardInput("two.csv")).ShouldBe(ExitCodes.Success);
+    }
+
+    /// <summary>
+    /// The command speaks the config file's language: a config is "proposed" until a person reviews it, then
+    /// "reviewed" (the <c>reviewedByPerson</c> flag), never the old word "confirmed".
+    /// </summary>
+    [Fact]
+    public void Output_UsesReviewedWording()
+    {
+        Run(StandardInput("one.csv"));
+        _out.ToString().ShouldContain(", proposed)");
+
+        Run(StandardInput("one.csv"), "--accept");
+        Run(StandardInput("two.csv"));
+
+        _out.ToString().ShouldContain(", reviewed)");
+        _out.ToString().ShouldContain("reviewedByPerson");
+        AllConsoleText.ShouldNotContain("confirm", Case.Insensitive);
+        CliOptions.Usage.ShouldNotContain("confirm", Case.Insensitive);
     }
 
     [Fact]
