@@ -6,7 +6,8 @@ namespace Masque.Core.Tests.Query;
 /// Pins down the SQL rules Masque enforces before anything runs. Parsing: one SELECT, INSERT, UPDATE or DELETE,
 /// nothing that changes schema, runs code or reaches another database, and every table it touches. Reviewing
 /// against the columns masked for this caller: they may be selected, compared for equality, grouped and counted,
-/// but never sorted, pattern-matched, range-tested, put through a function, changed by UPDATE or copied elsewhere.
+/// but never sorted, pattern-matched, range-tested, put through a function or copied elsewhere. Writes may set them
+/// only to a single supplied value, and every written value is reported so the gate can handle tokens.
 /// </summary>
 public class SqlStatementTests
 {
@@ -200,17 +201,133 @@ public class SqlStatementTests
         Should.NotThrow(() => Review(sql));
     }
 
-    /// <summary>A masked column may not be changed by UPDATE, nor copied into another column.</summary>
+    /// <summary>
+    /// Masque only prevents exposure, so a masked column may be set to a value the caller supplies: a literal, a
+    /// number, NULL or a named parameter. The SQL Server form <c>UPDATE alias SET alias.col = ...</c> counts too.
+    /// </summary>
     [Theory]
     [InlineData("UPDATE People SET SSN = '123-45-6789' WHERE Id = 1")]
+    [InlineData("UPDATE People SET SSN = @ssn, Name = 'Pat Lee' WHERE Id = 1")]
+    [InlineData("UPDATE People SET Status = 'A', SSN = NULL")]
+    [InlineData("UPDATE People SET SSN = 123456789")]
+    [InlineData("UPDATE p SET p.SSN = @s FROM People p WHERE p.Id = 1")]
+    public void Review_SettingMaskedColumnToSuppliedValue_Passes(string sql)
+    {
+        Should.NotThrow(() => Review(sql));
+    }
+
+    /// <summary>
+    /// A masked column may be set only to a single supplied value: Masque can swap a token for its real value only when
+    /// the token is the whole value, and copying from another column could launder a masked value. A positional
+    /// <c>?</c> has no name to look its value up by, so it is refused for masked columns.
+    /// </summary>
+    [Theory]
+    [InlineData("UPDATE People SET SSN = SSN")]
+    [InlineData("UPDATE People SET SSN = Notes")]
+    [InlineData("UPDATE People SET SSN = UPPER('x')")]
+    [InlineData("UPDATE People SET SSN = '1' || '2'")]
+    [InlineData("UPDATE People SET SSN = ?")]
+    [InlineData("UPDATE People SET SSN = (SELECT SSN FROM People WHERE Id = 2)")]
+    [InlineData("INSERT INTO People (SSN) VALUES (UPPER('x'))")]
+    [InlineData("INSERT INTO People (Name, SSN) VALUES ('Pat Lee', ?)")]
+    public void Review_SettingMaskedColumnToAnythingElse_IsRefused(string sql)
+    {
+        Refused(sql).Message.ShouldContain("single value");
+    }
+
+    /// <summary>A VALUES row must give one value per listed column, so each value's column is known.</summary>
+    [Fact]
+    public void Review_ValuesRowOfWrongLength_IsRefused()
+    {
+        Refused("INSERT INTO People (Name, SSN) VALUES ('Pat Lee')").Message.ShouldContain("one value per");
+    }
+
+    /// <summary>A masked column may never be copied into another column, where it would no longer be masked.</summary>
+    [Theory]
     [InlineData("UPDATE People SET Notes = SSN")]
     [InlineData("UPDATE People SET Status = (SELECT SSN FROM People WHERE Id = 1)")]
     [InlineData("INSERT INTO Archive (Notes) SELECT SSN FROM People")]
     [InlineData("INSERT INTO Archive (Notes) VALUES ((SELECT Name FROM People WHERE Id = 1))")]
     [InlineData("WITH c AS (SELECT SSN AS k FROM People) INSERT INTO Archive (Notes) SELECT k FROM c")]
-    public void Review_ChangingOrCopyingMaskedColumns_IsRefused(string sql)
+    public void Review_CopyingMaskedColumns_IsRefused(string sql)
     {
         Refused(sql);
+    }
+
+    // ---- Review: written values ----
+
+    /// <summary>
+    /// Every string literal and named parameter an UPDATE writes is reported, with the masked column's type when it
+    /// lands in one (so the gate can swap a token for its real value) and no type otherwise (so the gate can refuse a
+    /// token that would be stored as a fake). Filters in WHERE are not written values.
+    /// </summary>
+    [Fact]
+    public void Review_UpdateValues_AreWrittenValues()
+    {
+        var review = Review("UPDATE People SET SSN = '900-11-2222', Status = 'A', Name = @n WHERE SSN = 'x'");
+
+        review.WrittenValues.Select(v => (v.Text, v.Kind, v.Type)).ShouldBe(
+        [
+            ("900-11-2222", TokenFilterKind.Literal, (SensitiveDataType?)SensitiveDataType.Ssn),
+            ("A", TokenFilterKind.Literal, null),
+            ("@n", TokenFilterKind.Parameter, SensitiveDataType.Name),
+        ]);
+        review.TokenFilters.Select(f => f.Text).ShouldBe(["x"]);
+    }
+
+    /// <summary>
+    /// INSERT values are matched to the column list by position, row by row. Positional <c>?</c> parameters into
+    /// unmasked columns are allowed but not reported: they have no name to look up.
+    /// </summary>
+    [Fact]
+    public void Review_InsertValues_AreMatchedToTheirColumns()
+    {
+        const string sql = "INSERT INTO People (Name, SSN, Status) VALUES ('Pat Lee', @s, 'A'), ('Lee Kim', '900-11-2222', ?)";
+
+        var written = Review(sql).WrittenValues;
+
+        written.Select(v => (v.Text, v.Type)).ShouldBe(
+        [
+            ("Pat Lee", (SensitiveDataType?)SensitiveDataType.Name),
+            ("@s", SensitiveDataType.Ssn),
+            ("A", null),
+            ("Lee Kim", SensitiveDataType.Name),
+            ("900-11-2222", SensitiveDataType.Ssn),
+        ]);
+        written.ShouldAllBe(v => sql.Substring(v.Start, v.Length).Contains(v.Text));
+    }
+
+    /// <summary>
+    /// Values whose column isn't known (no column list, an INSERT ... SELECT, or inside an expression) are reported
+    /// without a type, so a token among them can be refused rather than stored as a fake.
+    /// </summary>
+    [Theory]
+    [InlineData("INSERT INTO People VALUES (1, 'Pat Lee')", "Pat Lee")]
+    [InlineData("INSERT INTO Archive (Notes) SELECT 'Pat Lee' FROM People", "Pat Lee")]
+    [InlineData("UPDATE People SET Notes = 'Call ' || @x", "Call ", "@x")]
+    public void Review_ValuesWithoutAKnownColumn_HaveNoType(string sql, params string[] expected)
+    {
+        var written = Review(sql).WrittenValues;
+
+        written.Select(v => v.Text).ShouldBe(expected);
+        written.ShouldAllBe(v => v.Type == null);
+    }
+
+    /// <summary>A comparison inside a written CASE is a filter, not a written value; its result values are written.</summary>
+    [Fact]
+    public void Review_CaseConditionInSet_IsAFilterNotAWrittenValue()
+    {
+        var review = Review("UPDATE People SET Status = CASE WHEN SSN = 'x' THEN 'A' ELSE 'B' END");
+
+        review.TokenFilters.Select(f => f.Text).ShouldBe(["x"]);
+        review.WrittenValues.Select(v => v.Text).ShouldBe(["A", "B"]);
+    }
+
+    /// <summary>A SELECT writes nothing.</summary>
+    [Fact]
+    public void Review_Select_HasNoWrittenValues()
+    {
+        Review("SELECT * FROM People WHERE SSN = 'x' AND Status = 'A'").WrittenValues.ShouldBeEmpty();
     }
 
     // ---- Review: outputs and token filters ----

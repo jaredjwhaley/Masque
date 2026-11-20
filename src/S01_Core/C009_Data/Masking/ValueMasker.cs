@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using Masque.Core;
 using Masque.Core.Detection;
 using Masque.Core.Tables;
@@ -7,13 +8,17 @@ namespace Masque.Data.Masking;
 
 /// <summary>
 /// Masks single values by a column's plan, and turns tokens back into the values they stand for when a caller filters
-/// on one. Serializes vault access, so one instance can serve every connection.
+/// on one or writes one. Serializes vault access, so one instance can serve every connection.
 /// </summary>
 /// <param name="tokenizer">Creates and reuses tokens.</param>
 /// <param name="vault">The vault behind the tokenizer, for reverse lookups.</param>
 /// <param name="classifier">Spots values that look sensitive.</param>
 internal sealed class ValueMasker(Tokenizer tokenizer, ITokenVault vault, ColumnClassifier classifier)
 {
+    /// <summary>Every type that has tokens, for checking whether a written value is one.</summary>
+    private static readonly SensitiveDataType[] SensitiveTypes =
+        [.. Enum.GetValues<SensitiveDataType>().Where(type => type.IsSensitive())];
+
     private readonly Lock _vaultLock = new();
 
     /// <summary>Masks one value, recording in the vault how the data spells it so the token can be filtered on later.</summary>
@@ -66,6 +71,42 @@ internal sealed class ValueMasker(Tokenizer tokenizer, ITokenVault vault, Column
 
             values = vault.GetSpellings(type, token).Prepend(normalized).Distinct(StringComparer.Ordinal).ToList();
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Finds the one value to store when a caller writes a token into a masked column of its type. A token stands for
+    /// one value but may have been seen in several spellings; the first spelling in ordinal order is used so the
+    /// choice is the same every time, and a token with no recorded spelling (issued elsewhere) gives its normalized
+    /// value.
+    /// </summary>
+    /// <param name="type">The masked column's type.</param>
+    /// <param name="token">The value the caller wrote.</param>
+    /// <param name="value">The real value to store, when <paramref name="token"/> is a token of <paramref name="type"/>.</param>
+    /// <returns><see langword="true"/> when it is a known token of that type.</returns>
+    public bool TryResolveForWrite(SensitiveDataType type, string token, [NotNullWhen(true)] out string? value)
+    {
+        lock (_vaultLock)
+        {
+            if (!vault.TryGetOriginal(type, token, out var normalized))
+            {
+                value = null;
+                return false;
+            }
+
+            value = vault.GetSpellings(type, token).Order(StringComparer.Ordinal).FirstOrDefault() ?? normalized;
+            return true;
+        }
+    }
+
+    /// <summary>Whether <paramref name="text"/> is a token the vault holds for any sensitive type.</summary>
+    /// <param name="text">A value a caller wrote.</param>
+    /// <returns><see langword="true"/> when some type's vault entry has this token.</returns>
+    public bool IsToken(string text)
+    {
+        lock (_vaultLock)
+        {
+            return SensitiveTypes.Any(type => vault.ContainsToken(type, text));
         }
     }
 

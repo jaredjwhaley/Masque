@@ -16,6 +16,12 @@ internal sealed partial class SqlWalker
     private readonly HashSet<string> _cteNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<int> _cteOpens = [];
     private readonly List<TokenFilter> _filters = [];
+
+    /// <summary>Values the statement writes, by token index; a typed entry (masked target) is added before any untyped one.</summary>
+    private readonly Dictionary<int, WrittenValue> _written = [];
+
+    /// <summary>An INSERT's column list, each with its masked type (null when unmasked); null when there is no list.</summary>
+    private List<(string Name, SensitiveDataType? Type)>? _insertColumns;
     private TableReference? _writeTarget;
     private int _mainIndex;
     private StatementKind _kind;
@@ -64,7 +70,11 @@ internal sealed partial class SqlWalker
         }
 
         var tables = _tables.DistinctBy(t => t.Qualified, StringComparer.OrdinalIgnoreCase).ToList();
-        return new WalkResult(_kind, tables, _filters);
+
+        // A literal compared with a masked column (in a written CASE, say) is a filter, not a stored value.
+        var filterStarts = _filters.Select(f => f.Start).ToHashSet();
+        var written = _written.Values.Where(v => !filterStarts.Contains(v.Start)).OrderBy(v => v.Start).ToList();
+        return new WalkResult(_kind, tables, _filters, written);
     }
 
     /// <summary>
@@ -252,8 +262,50 @@ internal sealed partial class SqlWalker
             SqlTokenKind.Word when !SqlKeywords.IsName(token) => OnKeyword(i),
             SqlTokenKind.Word or SqlTokenKind.QuotedName => OnName(i),
             SqlTokenKind.Number => OnNumber(i),
+            SqlTokenKind.String or SqlTokenKind.Parameter => OnValue(i),
             _ => i + 1,
         };
+    }
+
+    /// <summary>
+    /// Records a string literal or named parameter as written, without a type, when it sits where a write takes its
+    /// values from: an UPDATE's SET clause, an INSERT's VALUES, or the select list of a query whose rows are written.
+    /// A value already recorded with its masked column's type keeps that entry.
+    /// </summary>
+    private int OnValue(int i)
+    {
+        var query = Current;
+        while (!query.IsQuery && query.Parent is not null)
+        {
+            query = query.Parent;
+        }
+
+        var isWritten = (query.Kind == ScopeKind.Root && query.Clause is Clause.Set or Clause.Values)
+            || (query.InWriteSource && query.Clause == Clause.Select);
+
+        if (isWritten)
+        {
+            RecordWritten(i, type: null);
+        }
+
+        return i + 1;
+    }
+
+    /// <summary>Records the literal or named parameter at <paramref name="i"/> as a written value; positional <c>?</c> is skipped.</summary>
+    private void RecordWritten(int i, SensitiveDataType? type)
+    {
+        var token = _t[i];
+        var kind = token.Kind switch
+        {
+            SqlTokenKind.String => TokenFilterKind.Literal,
+            SqlTokenKind.Parameter when !token.Text.StartsWith('?') => TokenFilterKind.Parameter,
+            _ => (TokenFilterKind?)null,
+        };
+
+        if (kind is not null)
+        {
+            _written.TryAdd(i, new WrittenValue(token.Text, kind.Value, type, token.Start, token.Length));
+        }
     }
 
     private Scope Current => _scopes.Peek();
@@ -277,12 +329,19 @@ internal sealed partial class SqlWalker
 
         if (k < _t.Count && _t[k].IsSymbol("("))
         {
+            _insertColumns = [];
             for (var j = k + 1; j < _match[k]; j++)
             {
-                var expected = (j - k) % 2 == 1 ? SqlKeywords.IsName(_t[j]) : _t[j].IsSymbol(",");
+                var isName = (j - k) % 2 == 1;
+                var expected = isName ? SqlKeywords.IsName(_t[j]) : _t[j].IsSymbol(",");
                 if (!expected)
                 {
                     throw new QueryRejectedException("An INSERT column list may hold only column names.");
+                }
+
+                if (isName)
+                {
+                    _insertColumns.Add((_t[j].Text, _masked.TryGetValue(_t[j].Text, out var type) ? type : null));
                 }
             }
 
@@ -507,6 +566,11 @@ internal sealed partial class SqlWalker
             : previous.IsWord("VALUES") || (previous.IsSymbol(",") && Current.Clause == Clause.Values) ? ScopeKind.ValuesRow
             : SqlKeywords.IsName(previous) || previous.IsWord("LEFT") || previous.IsWord("RIGHT") ? ScopeKind.Function
             : ScopeKind.Group;
+
+        if (kind == ScopeKind.ValuesRow && _insertColumns is not null)
+        {
+            CheckValuesRow(i);
+        }
 
         return Push(kind, i, kind == ScopeKind.Function ? previous.Text : null);
     }
@@ -746,7 +810,9 @@ internal sealed partial class SqlWalker
     /// <param name="Kind">The statement's kind.</param>
     /// <param name="Tables">The tables it touches.</param>
     /// <param name="TokenFilters">Literals compared with masked columns.</param>
-    internal sealed record WalkResult(StatementKind Kind, IReadOnlyList<TableReference> Tables, IReadOnlyList<TokenFilter> TokenFilters);
+    /// <param name="WrittenValues">Literals and named parameters a write stores.</param>
+    internal sealed record WalkResult(
+        StatementKind Kind, IReadOnlyList<TableReference> Tables, IReadOnlyList<TokenFilter> TokenFilters, IReadOnlyList<WrittenValue> WrittenValues);
 
     /// <summary>One level of parentheses (or the whole statement) and what has been seen in it.</summary>
     private sealed class Scope(ScopeKind kind, int open, bool inWriteSource, string? functionName, Scope? parent)

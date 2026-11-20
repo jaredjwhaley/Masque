@@ -3,8 +3,9 @@ namespace Masque.Core.Query;
 /// <summary>
 /// The masked-column rules. A masked column may be: selected as a whole column; compared with =, &lt;&gt;, IN (...)
 /// or IS [NOT] NULL against a literal, parameter, NULL or another masked column (in WHERE, ON, HAVING or a CASE WHEN);
-/// grouped; counted; or listed as an INSERT column. Anything else could reveal part of a value (sorting, patterns,
-/// ranges, functions, arithmetic) or copy it somewhere unmasked, so it is refused.
+/// grouped; counted; or written, as an UPDATE's SET target or an INSERT column, with a single supplied value. Anything
+/// else could reveal part of a value (sorting, patterns, ranges, functions, arithmetic) or copy it somewhere unmasked,
+/// so it is refused.
 /// </summary>
 internal sealed partial class SqlWalker
 {
@@ -60,6 +61,20 @@ internal sealed partial class SqlWalker
     {
         var scope = Current;
         var effective = scope.Effective;
+
+        // An UPDATE's SET target: the caller may write it, with a single value they supply.
+        if (scope.Kind == ScopeKind.Root && scope.Clause == Clause.Set && start == scope.ItemStart
+            && end + 1 < _t.Count && _t[end + 1].IsSymbol("="))
+        {
+            var value = end + 2;
+            if (!IsSingleValue(value, value) || !IsSetItemEnd(value + 1))
+            {
+                throw Refuse(column, SingleValueRule);
+            }
+
+            RecordWritten(value, type);
+            return value + 1;
+        }
 
         // A whole column in a select list.
         if (scope.Kind is ScopeKind.Root or ScopeKind.Cte or ScopeKind.Derived or ScopeKind.Exists
@@ -313,6 +328,74 @@ internal sealed partial class SqlWalker
         }
     }
 
+    /// <summary>
+    /// Matches one VALUES row to the INSERT's column list: it must give one value per column, and each masked column's
+    /// value must be a single supplied value, recorded with the column's type.
+    /// </summary>
+    /// <param name="open">The row's opening parenthesis.</param>
+    private void CheckValuesRow(int open)
+    {
+        var columns = _insertColumns!;
+        var items = new List<(int First, int Last)>();
+        var close = _match[open];
+        if (close > open + 1)
+        {
+            var first = open + 1;
+            for (var j = open + 1; j < close; j++)
+            {
+                if (_t[j].IsSymbol("("))
+                {
+                    j = _match[j]; // Skip a nested group, function call or subquery whole.
+                }
+                else if (_t[j].IsSymbol(","))
+                {
+                    items.Add((first, j - 1));
+                    first = j + 1;
+                }
+            }
+
+            items.Add((first, close - 1));
+        }
+
+        if (items.Count != columns.Count)
+        {
+            throw new QueryRejectedException("Each VALUES row needs one value per listed column, in the same order.");
+        }
+
+        for (var p = 0; p < columns.Count; p++)
+        {
+            if (columns[p].Type is not { } type)
+            {
+                continue;
+            }
+
+            var (itemFirst, itemLast) = items[p];
+            if (!IsSingleValue(itemFirst, itemLast))
+            {
+                throw Refuse(columns[p].Name, SingleValueRule);
+            }
+
+            RecordWritten(itemFirst, type);
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="first"/>..<paramref name="last"/> is one supplied value a masked column may be written
+    /// with: a string, a number, NULL or a named parameter. A positional <c>?</c> is not: its value can't be found by
+    /// name, so a token in it couldn't be swapped for its real value.
+    /// </summary>
+    private bool IsSingleValue(int first, int last) =>
+        first == last && first < _t.Count && IsValue(_t[first])
+        && !(_t[first].Kind == SqlTokenKind.Parameter && _t[first].Text.StartsWith('?'));
+
+    /// <summary>Whether a SET item ends at <paramref name="k"/>: the next item, WHERE, FROM or the end.</summary>
+    private bool IsSetItemEnd(int k) =>
+        k >= _t.Count || _t[k].IsSymbol(",") || _t[k].IsWord("WHERE") || _t[k].IsWord("FROM");
+
+    private const string SingleValueRule =
+        "can only be written with a single value: a quoted value, a number, NULL or a named parameter (@name). That " +
+        "lets Masque swap a token for its real value, and keeps other columns from being copied into it";
+
     private bool IsConditionStart(int k)
     {
         if (k < 0)
@@ -348,8 +431,7 @@ internal sealed partial class SqlWalker
 
         if (effective.Clause == Clause.Set)
         {
-            var isTarget = (_t[start - 1].IsWord("SET") || _t[start - 1].IsSymbol(",")) && next.IsSymbol("=");
-            return isTarget ? "can't be changed by UPDATE" : "can't be copied into another column";
+            return "can't be copied into another column";
         }
 
         if (effective.Clause == Clause.Values || scope.InWriteSource)

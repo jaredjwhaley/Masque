@@ -11,11 +11,11 @@ Masque is a local layer between people or AI assistants and sensitive data. It r
 
 ## The rule
 
-Masque sees everything; the caller (a person or an AI) never sees or changes an existing sensitive value.
+Masque sees everything; the caller (a person or an AI) never sees a sensitive value it isn't allowed to see. Masque prevents exposure, not change: whoever drives the assistant may read the raw data themselves, so writes are fine when the policy allows them.
 
 - **Reads:** sensitive columns come back as tokens, unless the caller's policy shows that type raw.
-- **Inserts** with values the caller supplies: allowed, if the policy allows writes.
-- **Updates** may not set a sensitive column, since the caller only knows its token.
+- **Inserts and updates** may set a sensitive column to a single value the caller supplies (a quoted value, a number, `NULL` or a named parameter), if the policy allows writes.
+- **Tokens written back** stand for their real value: a token written as the whole value of a sensitive column of its type is stored as the real value it stands for. A token written anywhere else (another column, inside an expression, an `INSERT` without a column list) is refused, since it would be stored as a fake.
 - **Deletes:** allowed, if the policy allows writes.
 - **Copying** a sensitive column into another column (`INSERT ... SELECT`, `SET Notes = SSN`) is refused, since it would launder the value into a readable column.
 
@@ -155,7 +155,7 @@ Set `MASQUE_HOME` to the same folder for the `masque` CLI too (a user environmen
 
 ## How a query is checked and masked
 
-1. **Check.** The SQL is parsed before it runs. Masque accepts one `SELECT`, `INSERT`, `UPDATE` or `DELETE` (optionally after `WITH`), and refuses schema changes, procedures, `ATTACH`, `SELECT INTO`, set operators (`UNION` and the like) and `OUTPUT`/`RETURNING`. On a masked column it refuses anything that would reveal the value: sorting, `LIKE`, ranges, functions other than `COUNT`, arithmetic, comparison with an unmasked column, `UPDATE ... SET`, and copying into another table or column.
+1. **Check.** The SQL is parsed before it runs. Masque accepts one `SELECT`, `INSERT`, `UPDATE` or `DELETE` (optionally after `WITH`), and refuses schema changes, procedures, `ATTACH`, `SELECT INTO`, set operators (`UNION` and the like) and `OUTPUT`/`RETURNING`. On a masked column it refuses anything that would reveal the value: sorting, `LIKE`, ranges, functions other than `COUNT`, arithmetic, comparison with an unmasked column, setting it to anything but a single supplied value, and copying into another table or column.
 2. **Token filters.** A token compared with a masked column (`WHERE Ssn = '912-34-5678'`, as text or as a parameter) is swapped for the real value before the query runs, in every spelling Masque has seen it stored (`123-45-6789`, `123 45 6789`), so lookups and joins across sources line up.
 3. **Run.** The database's own guard backs up the check: on SQLite, an authorizer refuses schema changes, `ATTACH` and any write Masque didn't allow. On SQL Server, use a login with least privilege (`DENY UPDATE` on sensitive columns).
 4. **Mask.** The database reports, for each result column, the table column it came from (its *lineage*). That column's reviewed category decides the masking, so renaming a column in the query (`SELECT SSN AS x`) changes nothing. A computed column (an aggregate or expression) has no lineage: numbers are shown and text is masked. A readable column whose values look sensitive (an SSN in a "Status" column) is masked anyway.
@@ -164,7 +164,7 @@ Set `MASQUE_HOME` to the same folder for the `masque` CLI too (a user environmen
 **Known limits.**
 - A computed expression deliberately disguised as an amount (`SSN_number + 0 AS total`) can pass through; Masque guards against accidents, not a hostile query writer.
 - A token filter matches only spellings Masque has already shown. Positional `?` parameters aren't swapped.
-- Inserts aren't checked for a token being written as if it were real data.
+- Tokens are recognized only as a whole written value; a token inside longer text (`'Call <token> today'`) is stored as written. When a token was seen in several spellings, the first in ordinal order is written. A real value that happens to equal a token of the same type is treated as that token.
 - SQL Server write checks rely on the token-level SQL check and database permissions; a full T-SQL parser (ScriptDom) is planned.
 - Excel number formats are ignored (a ZIP stored as a number loses its leading zero), and a title row above the header isn't detected. Files are reloaded on every call.
 
@@ -232,7 +232,7 @@ SQL Server tests need LocalDB or a `MASQUE_TEST_SQLSERVER` connection string, an
 
 1. **Core** (in progress): tokenizer, rules, in-memory and encrypted SQLite vaults with Windows key protection, access policies. Next: macOS Keychain and Linux libsecret key protectors, date shifting per person, a vault a team can share.
 2. **CSV and CLI** (done): `masque file.csv` writes `file.masque.csv`; header and value detectors; saved configs with a review step. Dates are fully redacted until date shifting lands.
-3. **Data access** (first cut done): the ADO.NET gate, SQLite and SQL Server dialects, EF Core interceptors, token filters. Next: ScriptDom for SQL Server writes, checking inserts for tokens, Excel title rows and number formats, caching loaded files.
+3. **Data access** (first cut done): the ADO.NET gate, SQLite and SQL Server dialects, EF Core interceptors, token filters. Writes follow the exposure-only rule, with tokens swapped back to real values. Next: writes to CSV and Excel, ScriptDom for SQL Server writes, Excel title rows and number formats, caching loaded files.
 4. **MCP server and hooks:** `masque_describe`, `masque_query` and `masque_execute` done. Next: hooks that block raw reads of data files, and a review step the assistant can't perform itself.
 5. **Free text:** NER, a clipboard command, and a prompt-submit hook.
 6. **PDF** extraction.

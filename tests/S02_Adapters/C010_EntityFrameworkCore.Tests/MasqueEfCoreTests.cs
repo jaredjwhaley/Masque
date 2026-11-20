@@ -153,16 +153,23 @@ public sealed class MasqueEfCoreTests
         harness.RawScalar("SELECT COUNT(*) FROM People").ShouldBe(2L);
     }
 
-    /// <summary><c>ExecuteUpdate</c> runs as plain SQL, so the same review refuses setting a masked column.</summary>
+    /// <summary>
+    /// <c>ExecuteUpdate</c> runs as plain SQL through the same review, so a writer may set a masked column to a value
+    /// they supply, and a token they were shown is stored as its real value.
+    /// </summary>
     [Fact]
-    public void ExecuteUpdate_on_a_masked_column_is_refused()
+    public async Task ExecuteUpdate_on_a_masked_column_stores_supplied_values_and_swaps_tokens()
     {
         using var harness = new EfHarness();
-        using var context = harness.Context(harness.Gate(Writer));
+        await using var context = harness.Context(harness.Gate(Writer));
+        var cancel = TestContext.Current.CancellationToken;
 
-        Should.Throw<QueryRejectedException>(() =>
-            context.People.Where(p => p.Id == 1).ExecuteUpdate(s => s.SetProperty(p => p.Ssn, "900-99-9999")));
-        harness.RawScalar("SELECT Ssn FROM People WHERE Id = 1").ShouldBe(AliceSsn);
+        context.People.Where(p => p.Id == 1).ExecuteUpdate(s => s.SetProperty(p => p.Ssn, "900-99-9999")).ShouldBe(1);
+        harness.RawScalar("SELECT Ssn FROM People WHERE Id = 1").ShouldBe("900-99-9999");
+
+        var bobToken = (await context.People.AsNoTracking().SingleAsync(p => p.Id == 2, cancel)).Ssn!;
+        context.People.Where(p => p.Id == 1).ExecuteUpdate(s => s.SetProperty(p => p.Ssn, bobToken)).ShouldBe(1);
+        harness.RawScalar("SELECT Ssn FROM People WHERE Id = 1").ShouldBe("900-22-2222");
     }
 
     /// <summary><c>ExecuteUpdate</c> on a safe column runs for a caller allowed to write.</summary>

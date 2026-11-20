@@ -62,13 +62,32 @@ public sealed record TokenFilter(
 /// <param name="Negated">True for <c>&lt;&gt;</c> and <c>!=</c>, false for <c>=</c> and <c>==</c>.</param>
 public sealed record TokenComparison(int Start, int Length, int ColumnStart, int ColumnLength, bool Negated);
 
+/// <summary>
+/// A string literal or named parameter a write stores. If its value is a token Masque issued, it stands for the real
+/// value: written into a masked column of the token's type it is swapped for that value; anywhere else it would be
+/// stored as a fake, so it is refused.
+/// </summary>
+/// <param name="Text">The literal's value without quotes, or the parameter's name as written (with its prefix).</param>
+/// <param name="Kind">Whether <paramref name="Text"/> is a literal value or a parameter name.</param>
+/// <param name="Type">
+/// The masked column's type when the value is the whole value of a masked column; null when it lands in an unmasked
+/// column, in a column the statement doesn't name, or inside an expression.
+/// </param>
+/// <param name="Start">Where the literal or parameter starts in the SQL, including a literal's quote (or <c>N</c> prefix).</param>
+/// <param name="Length">How many characters it covers in the SQL.</param>
+public sealed record WrittenValue(string Text, TokenFilterKind Kind, SensitiveDataType? Type, int Start, int Length);
+
 /// <summary>What <see cref="SqlStatement.Review"/> found in a statement that passed.</summary>
 /// <param name="MaskedNames">
 /// The masked column names the statement can return, including aliases given to masked columns, each with its
 /// column's type (case-insensitive). A result column with one of these names is masked as that type.
 /// </param>
 /// <param name="TokenFilters">String literals compared with masked columns, in the order they appear.</param>
-public sealed record StatementReview(IReadOnlyDictionary<string, SensitiveDataType> MaskedNames, IReadOnlyList<TokenFilter> TokenFilters);
+/// <param name="WrittenValues">String literals and named parameters a write stores, in the order they appear.</param>
+public sealed record StatementReview(
+    IReadOnlyDictionary<string, SensitiveDataType> MaskedNames,
+    IReadOnlyList<TokenFilter> TokenFilters,
+    IReadOnlyList<WrittenValue> WrittenValues);
 
 /// <summary>
 /// One SQL statement, checked before it runs. <see cref="Parse"/> accepts a single SELECT, INSERT, UPDATE or DELETE
@@ -136,6 +155,6 @@ public sealed class SqlStatement
 
         var names = SqlWalker.TrackAliases(_tokens, masked);
         var result = new SqlWalker(_tokens, names).Walk();
-        return new StatementReview(names, result.TokenFilters);
+        return new StatementReview(names, result.TokenFilters, result.WrittenValues);
     }
 }

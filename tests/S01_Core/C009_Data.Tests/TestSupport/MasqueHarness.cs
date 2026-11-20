@@ -103,6 +103,14 @@ internal sealed class MasqueHarness : IDisposable
         command.ExecuteNonQuery();
     }
 
+    /// <summary>Reads one value straight from the raw connection, to check what was really stored (tests only).</summary>
+    public object? RawScalar(string sql)
+    {
+        using var command = Inner.CreateCommand();
+        command.CommandText = sql;
+        return command.ExecuteScalar();
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {

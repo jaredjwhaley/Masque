@@ -193,7 +193,7 @@ public sealed class MasqueGate : IDisposable
 
     /// <summary>
     /// Checks a statement and readies the raw command to run it: refuses what the caller may not do, loads reviewed
-    /// configs for its tables, and swaps tokens the caller filters on for parameters holding the real values.
+    /// configs for its tables, and swaps tokens the caller filters on or writes for parameters holding the real values.
     /// </summary>
     /// <param name="inner">The raw command; its text and parameters are changed until the result is disposed.</param>
     /// <param name="commandText">The SQL the caller sent.</param>
@@ -221,8 +221,24 @@ public sealed class MasqueGate : IDisposable
         var masked = MaskedColumns(statement, session, grant);
         var review = statement.Review(masked);
 
-        var (text, added) = RewriteTokenFilters(inner, commandText!, review);
-        inner.CommandText = text;
+        var added = new List<DbParameter>();
+        try
+        {
+            var edits = TokenFilterEdits(inner, commandText!, review, added);
+            edits.AddRange(WrittenValueEdits(inner, review, added));
+            inner.CommandText = ApplyEdits(commandText!, edits);
+        }
+        catch
+        {
+            // A refusal part-way leaves no real value behind on the caller's command.
+            foreach (var parameter in added)
+            {
+                inner.Parameters.Remove(parameter);
+            }
+
+            throw;
+        }
+
         return new PreparedCommand(inner, commandText!, added, session, grant, statement, review);
     }
 
@@ -294,12 +310,12 @@ public sealed class MasqueGate : IDisposable
     /// normalized value and each spelling seen in the data), since a source may store the value in any of them:
     /// <c>col = 'token'</c> becomes <c>col IN (@a, @b)</c>, <c>'token' &lt;&gt; col</c> becomes
     /// <c>col NOT IN (@a, @b)</c>, and an IN-list item becomes <c>@a, @b</c>. Literals that aren't tokens stay as
-    /// written. Works back to front so earlier positions hold.
+    /// written.
     /// </summary>
-    private (string Text, IReadOnlyList<DbParameter> Added) RewriteTokenFilters(DbCommand inner, string text, StatementReview review)
+    private List<TextEdit> TokenFilterEdits(DbCommand inner, string text, StatementReview review, List<DbParameter> added)
     {
-        var added = new List<DbParameter>();
-        foreach (var filter in review.TokenFilters.OrderByDescending(f => f.Comparison?.Start ?? f.Start))
+        var edits = new List<TextEdit>();
+        foreach (var filter in review.TokenFilters)
         {
             var candidate = filter.Kind == TokenFilterKind.Literal ? filter.Text : ParameterText(inner, filter.Text);
             if (candidate is null || !_masker.TryResolve(filter.Type, candidate, out var values))
@@ -307,18 +323,62 @@ public sealed class MasqueGate : IDisposable
                 continue;
             }
 
-            var list = string.Join(", ", values.Select(value => AddFilterParameter(inner, value, added)));
-
-            // Spans are replaced back to front, so the column (inside its own condition) is still at its position.
-            var (start, length, replacement) = filter.Comparison is { } comparison
-                ? (comparison.Start, comparison.Length,
+            var list = string.Join(", ", values.Select(value => AddMasqueParameter(inner, value, added)));
+            edits.Add(filter.Comparison is { } comparison
+                ? new TextEdit(comparison.Start, comparison.Length,
                     $"{text.AsSpan(comparison.ColumnStart, comparison.ColumnLength)} {(comparison.Negated ? "NOT IN" : "IN")} ({list})")
-                : (filter.Start, filter.Length, list);
-
-            text = string.Concat(text.AsSpan(0, start), replacement, text.AsSpan(start + length));
+                : new TextEdit(filter.Start, filter.Length, list));
         }
 
-        return (text, added);
+        return edits;
+    }
+
+    /// <summary>
+    /// Swaps each token written as the whole value of a masked column of its type for a parameter holding its real
+    /// value, so what the caller saw is stored as what it stands for. A token written anywhere else would be stored as
+    /// a fake (or, swapped, land where it could be read), so the statement is refused. Values that aren't tokens are
+    /// written as given.
+    /// </summary>
+    /// <exception cref="QueryRejectedException">A token is written outside a masked column of its own type.</exception>
+    private List<TextEdit> WrittenValueEdits(DbCommand inner, StatementReview review, List<DbParameter> added)
+    {
+        var edits = new List<TextEdit>();
+        foreach (var written in review.WrittenValues)
+        {
+            var candidate = written.Kind == TokenFilterKind.Literal ? written.Text : ParameterText(inner, written.Text);
+            if (candidate is null)
+            {
+                continue;
+            }
+
+            if (written.Type is { } type && _masker.TryResolveForWrite(type, candidate, out var value))
+            {
+                edits.Add(new TextEdit(written.Start, written.Length, AddMasqueParameter(inner, value, added)));
+            }
+            else if (_masker.IsToken(candidate))
+            {
+                // Never quote the value: it is a token, but the message may reach the caller's logs.
+                throw new QueryRejectedException(written.Type is null
+                    ? "A value being written is a Masque token, but not as the whole value of a masked column, so it " +
+                        "would be stored as a fake. Write a token only as the whole value of a masked column of its type, " +
+                        "and name the INSERT's columns."
+                    : "A value being written to a masked column is a Masque token of a different type, so it would be " +
+                        "stored as a fake. Write a token only into a masked column of its own type.");
+            }
+        }
+
+        return edits;
+    }
+
+    /// <summary>Applies non-overlapping edits back to front, so each one's position in the original text still holds.</summary>
+    private static string ApplyEdits(string text, IEnumerable<TextEdit> edits)
+    {
+        foreach (var edit in edits.OrderByDescending(e => e.Start))
+        {
+            text = string.Concat(text.AsSpan(0, edit.Start), edit.Replacement, text.AsSpan(edit.Start + edit.Length));
+        }
+
+        return text;
     }
 
     /// <summary>
@@ -343,14 +403,14 @@ public sealed class MasqueGate : IDisposable
         return null;
     }
 
-    /// <summary>Adds one string parameter for a token filter and returns its name.</summary>
+    /// <summary>Adds one string parameter holding a real value for a token, and returns its name.</summary>
     /// <exception cref="QueryRejectedException">The caller already uses Masque's reserved parameter name.</exception>
-    private static string AddFilterParameter(DbCommand inner, string value, List<DbParameter> added)
+    private static string AddMasqueParameter(DbCommand inner, string value, List<DbParameter> added)
     {
-        var name = $"@masque_filter_{added.Count}";
+        var name = $"@masque_value_{added.Count}";
         if (inner.Parameters.Contains(name) || inner.Parameters.Contains(name[1..]))
         {
-            throw new QueryRejectedException("Parameter names starting with masque_filter_ are reserved for Masque.");
+            throw new QueryRejectedException("Parameter names starting with masque_value_ are reserved for Masque.");
         }
 
         var parameter = inner.CreateParameter();
@@ -361,4 +421,7 @@ public sealed class MasqueGate : IDisposable
         added.Add(parameter);
         return name;
     }
+
+    /// <summary>One replacement in the command text: <paramref name="Length"/> characters at <paramref name="Start"/>.</summary>
+    private sealed record TextEdit(int Start, int Length, string Replacement);
 }

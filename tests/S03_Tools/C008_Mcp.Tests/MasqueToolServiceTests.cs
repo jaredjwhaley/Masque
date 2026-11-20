@@ -383,15 +383,33 @@ public sealed class MasqueToolServiceTests : IDisposable
         service.Query("clinic", "SELECT SUM(Visits) AS total_visits FROM patients", 5).Text.ShouldContain("| 4 |");
     }
 
-    /// <summary>Even with write access, setting a masked column is refused.</summary>
+    /// <summary>
+    /// Masque only prevents exposure, so with write access the assistant may set a masked column to a value it
+    /// supplies; the reply reports the count, never data.
+    /// </summary>
     [Fact]
-    public void Execute_UpdateOfMaskedColumn_IsRefused()
+    public void Execute_UpdateOfMaskedColumnWithSuppliedValue_Runs()
     {
         ClinicSource();
         using var service = ServiceWithPolicy(AssistantCanWrite);
         Reviewed(service, "clinic");
 
         var reply = service.Execute("clinic", "UPDATE patients SET Email = 'x@example.net'");
+
+        reply.IsError.ShouldBeFalse(reply.Text);
+        reply.Text.ShouldContain("1 row changed");
+        ShouldHoldNoRealValues(reply);
+    }
+
+    /// <summary>Copying a masked column into a readable one is still refused: that would expose it.</summary>
+    [Fact]
+    public void Execute_CopyOfMaskedColumn_IsRefused()
+    {
+        ClinicSource();
+        using var service = ServiceWithPolicy(AssistantCanWrite);
+        Reviewed(service, "clinic", ("Visits", SensitiveDataType.Safe));
+
+        var reply = service.Execute("clinic", "UPDATE patients SET Visits = Email");
 
         reply.IsError.ShouldBeTrue();
         ShouldHoldNoRealValues(reply);
