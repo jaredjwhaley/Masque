@@ -3,10 +3,11 @@
   <PropertyGroup>
     <AssemblyName>Masque.Excel</AssemblyName>
     <RootNamespace>Masque.Excel</RootNamespace>
-    <Description>Excel adapter for Masque: reads each worksheet of an .xlsx, .xlsm, .xlsb or .xls workbook as a table.</Description>
+    <Description>Excel adapter for Masque: reads each worksheet of an .xlsx, .xlsm, .xlsb or .xls workbook as a table, and saves changes back to .xlsx workbooks.</Description>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="ClosedXML" Version="0.105.1" />
     <PackageReference Include="ExcelDataReader" Version="3.9.0" />
   </ItemGroup>
 

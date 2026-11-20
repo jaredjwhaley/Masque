@@ -120,10 +120,13 @@ public sealed class MasqueToolService(ISourceResolver sources, MasqueGate gate) 
         }
     });
 
-    /// <summary>Runs one INSERT, UPDATE or DELETE, if the policy lets the assistant write.</summary>
-    /// <param name="source">A named SQLite or SQL Server source, or a database file.</param>
+    /// <summary>
+    /// Runs one INSERT, UPDATE or DELETE, if the policy lets the assistant write. On CSV or Excel data the write runs
+    /// on an in-memory copy and is then saved back to the files it changed, each with a backup of its previous version.
+    /// </summary>
+    /// <param name="source">A named source, a database, CSV or Excel file, or a folder of CSV and Excel files.</param>
     /// <param name="sql">One INSERT, UPDATE or DELETE statement.</param>
-    /// <returns>The reply, with the number of rows changed.</returns>
+    /// <returns>The reply, with the number of rows changed and any files saved.</returns>
     public ToolReply Execute(string source, string sql) => Guarded(() =>
     {
         if (SqlStatement.Parse(sql).Kind == StatementKind.Select)
@@ -131,19 +134,16 @@ public sealed class MasqueToolService(ISourceResolver sources, MasqueGate gate) 
             return Error("masque_execute runs INSERT, UPDATE or DELETE only. Use masque_query for SELECT.");
         }
 
-        using var opened = sources.Open(source);
-        if (opened.IsFileCopy)
-        {
-            return Error($"{opened.Name} is CSV or Excel data, which Masque reads from a copy; change the file itself instead.");
-        }
-
+        using var opened = sources.Open(source, writable: true);
         using var connection = gate.Wrap(opened.Connection);
         using var command = connection.CreateCommand();
         command.CommandText = sql;
 
         try
         {
-            return new ToolReply(ReplyFormatter.Executed(opened.Name, command.ExecuteNonQuery()), IsError: false);
+            var changed = command.ExecuteNonQuery();
+            var saved = opened.Files?.SaveChanges() ?? [];
+            return new ToolReply(ReplyFormatter.Executed(opened.Name, changed, saved), IsError: false);
         }
         catch (ReviewRequiredException ex)
         {
@@ -209,7 +209,7 @@ public sealed class MasqueToolService(ISourceResolver sources, MasqueGate gate) 
                 return call();
             }
             catch (Exception ex) when (ex is QueryRejectedException or QueryFailedException or SourceException or PolicyException
-                or CsvTableException or ExcelWorkbookException or VaultAccessException or TokenSpaceExhaustedException
+                or CsvTableException or ExcelWorkbookException or TableFileException or VaultAccessException or TokenSpaceExhaustedException
                 or PlatformNotSupportedException or NotSupportedException or FileNotFoundException or DirectoryNotFoundException
                 or UnauthorizedAccessException)
             {

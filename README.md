@@ -130,7 +130,7 @@ Each table shape (its set of column headers) gets a config file in the configs f
 | --- | --- |
 | `masque_describe(source)` | Lists tables, columns and each column's category. No values. Proposes a config for any new table shape. |
 | `masque_query(source, sql, maxRows, allowTypes)` | Runs one `SELECT` (or `WITH ... SELECT`) and returns the rows masked. `allowTypes` can narrow, never widen, what the policy shows raw. At most 1,000 rows. |
-| `masque_execute(source, sql)` | Runs one `INSERT`, `UPDATE` or `DELETE` on a SQLite or SQL Server source, if the policy lets the assistant write. Returns a row count, never data. |
+| `masque_execute(source, sql)` | Runs one `INSERT`, `UPDATE` or `DELETE` on any source, if the policy lets the assistant write. CSV and Excel changes are saved to the file with a backup. Returns a row count and the files saved, never data. |
 
 Keep `masque_execute` behind your assistant's approval prompt (in Claude Code, a permission rule that asks before each call), so a person sees every write.
 
@@ -143,7 +143,7 @@ A **source** is a CSV/TSV file, an Excel workbook (each sheet is a table), a SQL
     "drops":  { "type": "file",      "path": "C:\\data\\drops" } } }
 ```
 
-CSV and Excel tables are loaded into a private in-memory SQLite database for each call, so one SQL dialect covers every file type. They are read-only.
+CSV and Excel tables are loaded into a private in-memory SQLite database for each call, so one SQL dialect covers every file type. `masque_query` gets a read-only copy. `masque_execute` runs the write on a writable copy, works out which cells and rows changed, and saves just those changes back to each file it touched, keeping the previous version beside it as `<file>.<date-time>.masque-backup`. Saving is refused, leaving the file as it was, when the file changed on disk since it was read, is open in another program, or can't be saved safely (see the limits below).
 
 **Register it with Claude Code** (build first: `dotnet build src/S03_Tools/C008_Mcp -c Release`):
 
@@ -167,6 +167,8 @@ Set `MASQUE_HOME` to the same folder for the `masque` CLI too (a user environmen
 - Tokens are recognized only as a whole written value; a token inside longer text (`'Call <token> today'`) is stored as written. When a token was seen in several spellings, the first in ordinal order is written. A real value that happens to equal a token of the same type is treated as that token.
 - SQL Server write checks rely on the token-level SQL check and database permissions; a full T-SQL parser (ScriptDom) is planned.
 - Excel number formats are ignored (a ZIP stored as a number loses its leading zero), and a title row above the header isn't detected. Files are reloaded on every call.
+- Saving to CSV keeps the delimiter, byte order mark, line endings and the text of every unchanged cell, but rewrites quoting where a field needs it, drops blank lines, and writes UTF-8.
+- Changes are saved only to `.xlsx` workbooks without charts or pivot tables (the Excel library might drop those); `.xls`, `.xlsb` and `.xlsm` are refused. A cell holding a formula is never overwritten. New rows go right below the table and deleted rows are removed from the table's columns only; dates written as `yyyy-MM-dd` into a date column are stored as dates, other text as text.
 
 ## Token formats
 
@@ -232,7 +234,7 @@ SQL Server tests need LocalDB or a `MASQUE_TEST_SQLSERVER` connection string, an
 
 1. **Core** (in progress): tokenizer, rules, in-memory and encrypted SQLite vaults with Windows key protection, access policies. Next: macOS Keychain and Linux libsecret key protectors, date shifting per person, a vault a team can share.
 2. **CSV and CLI** (done): `masque file.csv` writes `file.masque.csv`; header and value detectors; saved configs with a review step. Dates are fully redacted until date shifting lands.
-3. **Data access** (first cut done): the ADO.NET gate, SQLite and SQL Server dialects, EF Core interceptors, token filters. Writes follow the exposure-only rule, with tokens swapped back to real values. Next: writes to CSV and Excel, ScriptDom for SQL Server writes, Excel title rows and number formats, caching loaded files.
+3. **Data access** (first cut done): the ADO.NET gate, SQLite and SQL Server dialects, EF Core interceptors, token filters. Writes follow the exposure-only rule, with tokens swapped back to real values, and CSV and Excel writes are saved back to the files with a backup. Next: ScriptDom for SQL Server writes, Excel title rows and number formats, caching loaded files.
 4. **MCP server and hooks:** `masque_describe`, `masque_query` and `masque_execute` done. Next: hooks that block raw reads of data files, and a review step the assistant can't perform itself.
 5. **Free text:** NER, a clipboard command, and a prompt-submit hook.
 6. **PDF** extraction.

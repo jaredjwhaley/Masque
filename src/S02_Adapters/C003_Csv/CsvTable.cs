@@ -64,7 +64,13 @@ public static class CsvTable
     /// <param name="path">The CSV file.</param>
     /// <returns>The header row and every data row, as written.</returns>
     /// <exception cref="CsvTableException">The file is empty or badly quoted.</exception>
-    public static TableData ReadTable(string path)
+    public static TableData ReadTable(string path) => ReadTable(path, out _);
+
+    /// <summary>Reads the whole file as a table, and reports the delimiter it uses.</summary>
+    /// <param name="path">The CSV file.</param>
+    /// <param name="delimiter">The detected field separator.</param>
+    /// <returns>The header row and every data row, as written.</returns>
+    internal static TableData ReadTable(string path, out string delimiter)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
@@ -77,6 +83,7 @@ public static class CsvTable
             rows.Add([.. parser.Record!]);
         }
 
+        delimiter = parser.Delimiter;
         return new TableData(Path.GetFileNameWithoutExtension(path), headers, rows);
     }
 
@@ -182,7 +189,8 @@ public static class CsvTable
         }
     }
 
-    private static bool HasUtf8ByteOrderMark(string path)
+    /// <summary>Whether the file starts with the UTF-8 byte order mark.</summary>
+    internal static bool HasUtf8ByteOrderMark(string path)
     {
         Span<byte> start = stackalloc byte[3];
         using var stream = File.OpenRead(path);

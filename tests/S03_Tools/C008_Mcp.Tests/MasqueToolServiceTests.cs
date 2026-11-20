@@ -415,16 +415,76 @@ public sealed class MasqueToolServiceTests : IDisposable
         ShouldHoldNoRealValues(reply);
     }
 
-    /// <summary>CSV and Excel sources are an in-memory copy, so writes to them are refused with a pointer to the file.</summary>
+    /// <summary>
+    /// A write to a CSV source is saved back to the file; the reply gives the count and names the backup of the
+    /// previous version, never data.
+    /// </summary>
     [Fact]
-    public void Execute_FileCopy_IsRefused()
+    public void Execute_OnCsv_SavesTheFileWithABackup()
     {
+        var path = PeopleCsv();
         using var service = ServiceWithPolicy(AssistantCanWrite);
+        Reviewed(service, path);
 
-        var reply = service.Execute(PeopleCsv(), "DELETE FROM people");
+        var reply = service.Execute(path, "UPDATE people SET Status = 'X' WHERE PersonId = 2");
 
-        reply.IsError.ShouldBeTrue();
-        reply.Text.ShouldContain("CSV or Excel");
+        reply.IsError.ShouldBeFalse(reply.Text);
+        reply.Text.ShouldContain("1 row changed");
+        reply.Text.ShouldContain(".masque-backup");
+        ShouldHoldNoRealValues(reply);
+        File.ReadAllLines(path)[2].ShouldEndWith(",980.00,X,");
+        Directory.GetFiles(_data, "people.csv.*.masque-backup").ShouldHaveSingleItem();
+    }
+
+    /// <summary>A token written to a masked CSV column is saved to the file as the real value it stands for.</summary>
+    [Fact]
+    public void Execute_TokenWrittenToCsv_SavesTheRealValue()
+    {
+        var path = PeopleCsv();
+        using var service = ServiceWithPolicy(AssistantCanWrite);
+        Reviewed(service, path);
+        var token = LastRow(service.Query(path, "SELECT Email FROM people WHERE PersonId = 2", 5)).Trim('|', ' ');
+
+        var reply = service.Execute(path, $"UPDATE people SET Email = '{token}' WHERE PersonId = 1");
+
+        reply.IsError.ShouldBeFalse(reply.Text);
+        ShouldHoldNoRealValues(reply);
+        File.ReadAllLines(path)[1].ShouldContain(",lee@example.org,");
+    }
+
+    /// <summary>A write to an Excel source is saved to the workbook.</summary>
+    [Fact]
+    public void Execute_OnWorkbook_SavesTheWorkbook()
+    {
+        var path = VisitsWorkbook();
+        using var service = ServiceWithPolicy(AssistantCanWrite);
+        Reviewed(service, path);
+
+        var reply = service.Execute(path, "DELETE FROM Visits WHERE VisitDate = '2026-01-05'");
+
+        reply.IsError.ShouldBeFalse(reply.Text);
+        reply.Text.ShouldContain("1 row changed");
+        using var workbook = new XLWorkbook(path);
+        workbook.Worksheet("Visits").Cell("B2").GetDateTime().ShouldBe(new DateTime(2026, 2, 9));
+        workbook.Worksheet("Visits").Cell("A3").IsEmpty().ShouldBeTrue();
+    }
+
+    /// <summary>A write that changes nothing leaves the file alone and makes no backup.</summary>
+    [Fact]
+    public void Execute_OnCsvChangingNothing_LeavesTheFile()
+    {
+        var path = PeopleCsv();
+        var before = File.ReadAllText(path);
+        using var service = ServiceWithPolicy(AssistantCanWrite);
+        Reviewed(service, path);
+
+        var reply = service.Execute(path, "DELETE FROM people WHERE PersonId = 99");
+
+        reply.IsError.ShouldBeFalse(reply.Text);
+        reply.Text.ShouldContain("0 rows changed");
+        reply.Text.ShouldNotContain("backup");
+        File.ReadAllText(path).ShouldBe(before);
+        Directory.GetFiles(_data).ShouldHaveSingleItem();
     }
 
     /// <summary>masque_execute doesn't read; a SELECT sent to it points the assistant at masque_query.</summary>

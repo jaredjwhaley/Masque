@@ -98,12 +98,25 @@ public static class ReplyFormatter
         return text.ToString();
     }
 
-    /// <summary>Reports a write.</summary>
+    /// <summary>Reports a write, and each file it was saved to with that file's backup. Names files, never data.</summary>
     /// <param name="source">The source's display name.</param>
     /// <param name="rowsChanged">The number of rows the statement changed.</param>
+    /// <param name="saved">CSV or Excel files the write was saved to; empty for databases.</param>
     /// <returns>The reply text.</returns>
-    public static string Executed(string source, int rowsChanged) =>
-        string.Create(CultureInfo.InvariantCulture, $"{source}: {Count(Math.Max(rowsChanged, 0), "row")} changed.");
+    public static string Executed(string source, int rowsChanged, IReadOnlyList<SavedFile> saved)
+    {
+        ArgumentNullException.ThrowIfNull(saved);
+
+        var text = new StringBuilder(
+            string.Create(CultureInfo.InvariantCulture, $"{source}: {Count(Math.Max(rowsChanged, 0), "row")} changed."));
+        foreach (var file in saved)
+        {
+            text.Append(CultureInfo.InvariantCulture,
+                $" Saved {file.Path}; its previous version is in {Path.GetFileName(file.BackupPath)} in the same folder.");
+        }
+
+        return text.ToString();
+    }
 
     /// <summary>Says in words what Masque did with a column's values.</summary>
     private static string Treatment(MaskAction action) => action switch

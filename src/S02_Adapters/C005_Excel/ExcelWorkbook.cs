@@ -13,7 +13,8 @@ public sealed class ExcelWorkbookException(string message) : Exception(message);
 
 /// <summary>
 /// Reads Excel workbooks (.xlsx, .xlsm, .xlsb and legacy .xls) as tables, one per non-empty worksheet.
-/// The first non-blank row of a sheet is its header; columns past the last header are ignored.
+/// The first non-blank row of a sheet is its header; the table's columns run from the header's first non-blank cell
+/// to its last, and blank rows are skipped.
 /// </summary>
 public static class ExcelWorkbook
 {
@@ -31,7 +32,13 @@ public static class ExcelWorkbook
     /// <param name="path">The workbook file.</param>
     /// <returns>One table per sheet that has a header row, named after the sheet, in workbook order.</returns>
     /// <exception cref="ExcelWorkbookException">The file isn't a readable workbook (damaged, encrypted or another format).</exception>
-    public static IReadOnlyList<TableData> ReadTables(string path)
+    public static IReadOnlyList<TableData> ReadTables(string path) => [.. ReadSheets(path).Select(sheet => sheet.Table)];
+
+    /// <summary>Reads every non-empty worksheet, with where its header and rows sit on the sheet.</summary>
+    /// <param name="path">The workbook file.</param>
+    /// <returns>One entry per sheet that has a header row, in workbook order.</returns>
+    /// <exception cref="ExcelWorkbookException">The file isn't a readable workbook.</exception>
+    internal static IReadOnlyList<SheetTable> ReadSheets(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
@@ -40,18 +47,18 @@ public static class ExcelWorkbook
             using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             using var reader = ExcelReaderFactory.CreateReader(stream);
 
-            var tables = new List<TableData>();
+            var sheets = new List<SheetTable>();
             do
             {
-                var table = ReadSheet(reader);
-                if (table is not null)
+                var sheet = ReadSheet(reader);
+                if (sheet is not null)
                 {
-                    tables.Add(table);
+                    sheets.Add(sheet);
                 }
             }
             while (reader.NextResult());
 
-            return tables;
+            return sheets;
         }
         catch (Exception ex) when (ex is not (OutOfMemoryException or FileNotFoundException or DirectoryNotFoundException
             or UnauthorizedAccessException))
@@ -64,12 +71,17 @@ public static class ExcelWorkbook
     }
 
     /// <summary>Reads the current sheet, or returns null when it has no non-blank row.</summary>
-    private static TableData? ReadSheet(IExcelDataReader reader)
+    private static SheetTable? ReadSheet(IExcelDataReader reader)
     {
         List<string>? headers = null;
+        var first = 0;
+        var headerRow = 0;
         var rows = new List<IReadOnlyList<string?>>();
+        var rowNumbers = new List<int>();
 
-        while (reader.Read())
+        // The reader returns every row from the top of the sheet, blank ones included, so counting reads gives the
+        // sheet row number (1-based, as Excel shows it).
+        for (var rowNumber = 1; reader.Read(); rowNumber++)
         {
             var cells = Enumerable.Range(0, reader.FieldCount).Select(i => CellText.From(reader.GetValue(i))).ToList();
             if (cells.All(string.IsNullOrWhiteSpace))
@@ -79,19 +91,36 @@ public static class ExcelWorkbook
 
             if (headers is null)
             {
-                // The header ends at its last non-blank cell; anything to the right has no column name.
-                var width = cells.FindLastIndex(c => !string.IsNullOrWhiteSpace(c)) + 1;
-                headers = cells.Take(width).Select(c => c?.Trim() ?? string.Empty).ToList();
+                // The header runs from its first non-blank cell to its last; cells outside it have no column name.
+                first = cells.FindIndex(c => !string.IsNullOrWhiteSpace(c));
+                var width = cells.FindLastIndex(c => !string.IsNullOrWhiteSpace(c)) + 1 - first;
+                headers = cells.Skip(first).Take(width).Select(c => c?.Trim() ?? string.Empty).ToList();
+                headerRow = rowNumber;
                 continue;
             }
 
-            var row = cells.Take(headers.Count).ToList();
+            var row = cells.Skip(first).Take(headers.Count).ToList();
             if (row.Any(c => !string.IsNullOrWhiteSpace(c)))
             {
                 rows.Add(row);
+                rowNumbers.Add(rowNumber);
             }
         }
 
-        return headers is null ? null : new TableData(reader.Name, headers, rows);
+        return headers is null
+            ? null
+            : new SheetTable(new TableData(reader.Name, headers, rows), new SheetLayout(reader.Name, headerRow, first + 1, rowNumbers));
     }
 }
+
+/// <summary>Where a table sits on its worksheet, so changes to it can be written to the right cells.</summary>
+/// <param name="SheetName">The worksheet's name.</param>
+/// <param name="HeaderRow">The header's sheet row number (1-based).</param>
+/// <param name="FirstColumn">The sheet column number (1-based, A = 1) of the table's first column.</param>
+/// <param name="DataRows">The sheet row number of each data row, in table order.</param>
+internal sealed record SheetLayout(string SheetName, int HeaderRow, int FirstColumn, IReadOnlyList<int> DataRows);
+
+/// <summary>A worksheet read as a table, with its layout.</summary>
+/// <param name="Table">The table.</param>
+/// <param name="Layout">Where it sits on the sheet.</param>
+internal sealed record SheetTable(TableData Table, SheetLayout Layout);

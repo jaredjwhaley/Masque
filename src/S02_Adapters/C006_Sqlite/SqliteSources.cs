@@ -15,12 +15,14 @@ public static class SqliteSources
         new HashSet<string>([".db", ".sqlite", ".sqlite3"], StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Loads tables into a new in-memory database and makes it read-only, since changes to a copy of a file would
-    /// be lost anyway. Numbers load as numbers; blank cells load as NULL.
+    /// Loads tables into a new in-memory database. Numbers load as numbers; blank cells load as NULL. The copy is
+    /// read-only unless <paramref name="writable"/> is set, for a caller that saves changes back to the files with
+    /// <see cref="ReadChanges"/>.
     /// </summary>
     /// <param name="tables">The tables, each with a header row.</param>
+    /// <param name="writable">Whether the copy accepts writes (Masque's own write checks still apply when wrapped).</param>
     /// <returns>The open connection; the caller owns it.</returns>
-    public static SqliteConnection LoadTables(IEnumerable<TableData> tables)
+    public static SqliteConnection LoadTables(IEnumerable<TableData> tables, bool writable = false)
     {
         ArgumentNullException.ThrowIfNull(tables);
 
@@ -35,9 +37,13 @@ public static class SqliteSources
             connection.Open();
             TableLoader.Load(connection, tables.ToList());
 
-            using var command = connection.CreateCommand();
-            command.CommandText = "PRAGMA query_only = ON";
-            command.ExecuteNonQuery();
+            if (!writable)
+            {
+                using var command = connection.CreateCommand();
+                command.CommandText = "PRAGMA query_only = ON";
+                command.ExecuteNonQuery();
+            }
+
             return connection;
         }
         catch
@@ -45,6 +51,21 @@ public static class SqliteSources
             connection.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Works out what writes did to tables loaded by <see cref="LoadTables"/>: the cells that changed (with their new
+    /// values), and the rows deleted and inserted, by their position in the file.
+    /// </summary>
+    /// <param name="connection">The connection the tables were loaded into, after the writes.</param>
+    /// <param name="tables">The same tables, in the same order, as were loaded.</param>
+    /// <returns>One entry per table, in the same order.</returns>
+    /// <exception cref="TableFileException">A changed value can't be saved to a file (binary data).</exception>
+    public static IReadOnlyList<TableChanges> ReadChanges(SqliteConnection connection, IReadOnlyList<TableData> tables)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(tables);
+        return TableChangeReader.Read(connection, tables);
     }
 
     /// <summary>Opens an existing SQLite database file. It is never created: a missing file is an error.</summary>
