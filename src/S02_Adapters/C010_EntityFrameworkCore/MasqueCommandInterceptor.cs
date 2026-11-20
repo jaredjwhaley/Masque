@@ -10,7 +10,7 @@ namespace Masque.EntityFrameworkCore;
 /// and scalars come back masked. The interceptor runs the command itself and hands EF Core the result.
 /// </summary>
 /// <remarks>
-/// Commands SaveChanges sends are left to <see cref="MasqueSaveChangesInterceptor"/>, which checks the tracked changes
+/// Commands SaveChanges sends are left to <see cref="MasqueSaveChangesInterceptor"/>, which applies the write rule to the tracked changes
 /// instead: EF Core's batched INSERT ... RETURNING statements are shapes the SQL check refuses on purpose.
 /// </remarks>
 /// <param name="sessions">The sessions shared by this context's Masque interceptors.</param>

@@ -80,32 +80,116 @@ public sealed class MasqueEfCoreTests
         id.ShouldBe(1);
     }
 
-    /// <summary>Changing a sensitive property of a loaded entity would write a token over the real value, so it is refused.</summary>
+    /// <summary>Masque prevents exposure, not change: a writer may set a masked property to a value they supply.</summary>
     [Fact]
-    public void Updating_a_sensitive_property_is_refused()
+    public void Updating_a_masked_property_with_a_supplied_value_is_saved()
     {
         using var harness = new EfHarness();
         using var context = harness.Context(harness.Gate(Writer));
         var alice = context.People.Single(p => p.Id == 1);
 
         alice.Ssn = "900-99-9999";
+        context.SaveChanges();
 
-        Should.Throw<QueryRejectedException>(() => context.SaveChanges());
-        harness.RawScalar("SELECT Ssn FROM People WHERE Id = 1").ShouldBe(AliceSsn);
+        harness.RawScalar("SELECT Ssn FROM People WHERE Id = 1").ShouldBe("900-99-9999");
     }
 
-    /// <summary><c>Update()</c> marks every property modified, sensitive ones included, so it is refused.</summary>
+    /// <summary>
+    /// A token saved into a masked property of its type is stored as the real value it stands for, while the entity
+    /// keeps the token and ends the save unchanged, so the caller never holds the real value.
+    /// </summary>
     [Fact]
-    public void Update_of_a_whole_entity_is_refused()
+    public void Saving_a_token_stores_its_real_value_and_the_entity_keeps_the_token()
     {
         using var harness = new EfHarness();
         using var context = harness.Context(harness.Gate(Writer));
-        var alice = context.People.AsNoTracking().Single(p => p.Id == 1);
+        var alice = context.People.Single(p => p.Id == 1);
+        var bobToken = context.People.AsNoTracking().Single(p => p.Id == 2).Ssn!;
+
+        alice.Ssn = bobToken;
+        context.SaveChanges();
+
+        harness.RawScalar("SELECT Ssn FROM People WHERE Id = 1").ShouldBe("900-22-2222");
+        alice.Ssn.ShouldBe(bobToken);
+        context.Entry(alice).State.ShouldBe(EntityState.Unchanged);
+    }
+
+    /// <summary>
+    /// <c>Update()</c> marks every property modified, so a loaded entity's tokens are written back too; each is stored
+    /// as its real value, leaving the masked columns as they were.
+    /// </summary>
+    [Fact]
+    public async Task Update_of_a_whole_entity_keeps_the_real_values()
+    {
+        using var harness = new EfHarness();
+        await using var context = harness.Context(harness.Gate(Writer));
+        var cancel = TestContext.Current.CancellationToken;
+        var alice = await context.People.AsNoTracking().SingleAsync(p => p.Id == 1, cancel);
         alice.Visits = 4;
 
         context.Update(alice);
+        await context.SaveChangesAsync(cancel);
 
+        harness.RawScalar("SELECT Visits FROM People WHERE Id = 1").ShouldBe(4L);
+        harness.RawScalar("SELECT Ssn FROM People WHERE Id = 1").ShouldBe(AliceSsn);
+        harness.RawScalar("SELECT FullName FROM People WHERE Id = 1").ShouldBe(AliceName);
+        harness.RawScalar("SELECT Email FROM People WHERE Id = 1").ShouldBe(AliceEmail);
+        alice.Ssn.ShouldNotBe(AliceSsn);
+    }
+
+    /// <summary>A token in a new entity's masked property is stored as its real value.</summary>
+    [Fact]
+    public void Inserting_a_token_stores_its_real_value()
+    {
+        using var harness = new EfHarness();
+        using var context = harness.Context(harness.Gate(Writer));
+        var bobToken = context.People.AsNoTracking().Single(p => p.Id == 2).Ssn!;
+
+        context.People.Add(new Person { Id = 3, FullName = "Carol Test", Ssn = bobToken, Visits = 1 });
+        context.SaveChanges();
+
+        harness.RawScalar("SELECT Ssn FROM People WHERE Id = 3").ShouldBe("900-22-2222");
+    }
+
+    /// <summary>
+    /// A token saved where it isn't masked as its own type would be stored as a fake (or swapped, become readable),
+    /// so the save is refused and nothing is written.
+    /// </summary>
+    [Fact]
+    public void Saving_a_token_outside_a_masked_property_of_its_type_is_refused()
+    {
+        using var harness = new EfHarness();
+        using var context = harness.Context(harness.Gate(new([SensitiveDataType.Email], canWrite: true)));
+        var alice = context.People.Single(p => p.Id == 1);
+        var ssnToken = alice.Ssn!;
+
+        alice.Email = ssnToken;
         Should.Throw<QueryRejectedException>(() => context.SaveChanges());
+
+        alice.Email = AliceEmail;
+        alice.FullName = ssnToken;
+        Should.Throw<QueryRejectedException>(() => context.SaveChanges());
+
+        harness.RawScalar("SELECT Email FROM People WHERE Id = 1").ShouldBe(AliceEmail);
+        harness.RawScalar("SELECT FullName FROM People WHERE Id = 1").ShouldBe(AliceName);
+    }
+
+    /// <summary>When the database rejects a save, the entities get their tokens back, still marked for saving.</summary>
+    [Fact]
+    public void Failed_save_puts_the_tokens_back()
+    {
+        using var harness = new EfHarness();
+        using var context = harness.Context(harness.Gate(Writer));
+        var alice = context.People.Single(p => p.Id == 1);
+        var bobToken = context.People.AsNoTracking().Single(p => p.Id == 2).Ssn!;
+
+        alice.Ssn = bobToken;
+        context.People.Add(new Person { Id = 2, FullName = "Duplicate Id", Visits = 1 });
+
+        Should.Throw<DbUpdateException>(() => context.SaveChanges());
+
+        alice.Ssn.ShouldBe(bobToken);
+        context.Entry(alice).State.ShouldBe(EntityState.Modified);
         harness.RawScalar("SELECT Ssn FROM People WHERE Id = 1").ShouldBe(AliceSsn);
     }
 

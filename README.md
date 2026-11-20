@@ -95,7 +95,7 @@ options.UseSqlite(connectionString).UseMasque(gate);
 - LINQ and raw SQL results come back with sensitive properties holding tokens.
 - A token you were shown works in a filter: `db.People.Where(p => p.Ssn == token)` finds the real row.
 - Queries that would reveal masked values are refused with `QueryRejectedException`, such as sorting by a masked column.
-- `SaveChanges` refuses to change a property mapped to a masked column, because the loaded entity holds a token, not the real value. `context.Update(entity)` marks every property changed, so it is refused too. Changing only unmasked properties, adding and removing entities all work.
+- `SaveChanges` follows the same write rule as SQL, if the policy allows writes: any property may be saved with a value you supply. A loaded entity holds tokens in masked properties, so each token being saved into a masked column of its type is stored as its real value (`context.Update(entity)` leaves the masked columns as they were), and the entity gets the token back once the save ends. A token saved anywhere else is refused.
 - `ExecuteUpdate` and `ExecuteDelete` get the same checks as any SQL.
 - Migrations and `EnsureCreated` don't run through a Masque context (schema changes are refused); run them on a plain context.
 
@@ -234,7 +234,7 @@ SQL Server tests need LocalDB or a `MASQUE_TEST_SQLSERVER` connection string, an
 
 1. **Core** (in progress): tokenizer, rules, in-memory and encrypted SQLite vaults with Windows key protection, access policies. Next: macOS Keychain and Linux libsecret key protectors, date shifting per person, a vault a team can share.
 2. **CSV and CLI** (done): `masque file.csv` writes `file.masque.csv`; header and value detectors; saved configs with a review step. Dates are fully redacted until date shifting lands.
-3. **Data access** (first cut done): the ADO.NET gate, SQLite and SQL Server dialects, EF Core interceptors, token filters. Writes follow the exposure-only rule, with tokens swapped back to real values, and CSV and Excel writes are saved back to the files with a backup. Next: ScriptDom for SQL Server writes, Excel title rows and number formats, caching loaded files.
+3. **Data access** (first cut done): the ADO.NET gate, SQLite and SQL Server dialects, EF Core interceptors, token filters. Writes (SQL and EF Core SaveChanges) follow the exposure-only rule, with tokens swapped back to real values, and CSV and Excel writes are saved back to the files with a backup. Next: ScriptDom for SQL Server writes, Excel title rows and number formats, caching loaded files.
 4. **MCP server and hooks:** `masque_describe`, `masque_query` and `masque_execute` done. Next: hooks that block raw reads of data files, and a review step the assistant can't perform itself.
 5. **Free text:** NER, a clipboard command, and a prompt-submit hook.
 6. **PDF** extraction.

@@ -10,32 +10,35 @@ using Microsoft.EntityFrameworkCore.Storage;
 namespace Masque.EntityFrameworkCore;
 
 /// <summary>
-/// Checks SaveChanges before EF Core writes anything: the caller's policy must allow writes, and no modified property
-/// may map to a column masked for them. Loaded entities hold tokens in masked properties, so saving one would write a
-/// token over the real value. Inserts and deletes are allowed. While the save runs, the connection's write window is
-/// open so the database's own guard lets EF Core's statements through.
+/// Applies Masque's write rule to SaveChanges, the same rule plain SQL writes follow. The caller's policy must allow
+/// writes. Masque prevents exposure, not change, so any property may be saved with a value the caller supplies; but a
+/// loaded entity holds tokens in masked properties, so each token about to be written into a masked column of its
+/// type is swapped for the real value it stands for, and put back once the save ends, so the caller's entities never
+/// hold a real value. A token about to be written anywhere else is refused. While the save runs, the connection's
+/// write window is open so the database's own guard lets EF Core's statements through.
 /// </summary>
 /// <param name="sessions">The sessions shared by this context's Masque interceptors.</param>
 internal sealed class MasqueSaveChangesInterceptor(MasqueEfSessions sessions) : SaveChangesInterceptor
 {
-    private readonly ConditionalWeakTable<DbContext, IDisposable> _writeWindows = [];
+    private readonly ConditionalWeakTable<DbContext, SaveInProgress> _saves = [];
 
     /// <inheritdoc />
     public override InterceptionResult<int> SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)
     {
         if (eventData.Context is { } context && Check(context) is { } changes)
         {
+            IReadOnlyList<TokenSwap> swaps;
             context.Database.OpenConnection();
             try
             {
-                Refuse(context, changes);
+                swaps = FindTokenSwaps(context, changes);
             }
             finally
             {
                 context.Database.CloseConnection();
             }
 
-            OpenWriteWindow(context);
+            Begin(context, swaps);
         }
 
         return result;
@@ -47,17 +50,18 @@ internal sealed class MasqueSaveChangesInterceptor(MasqueEfSessions sessions) : 
     {
         if (eventData.Context is { } context && Check(context) is { } changes)
         {
+            IReadOnlyList<TokenSwap> swaps;
             await context.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                Refuse(context, changes);
+                swaps = FindTokenSwaps(context, changes);
             }
             finally
             {
                 await context.Database.CloseConnectionAsync().ConfigureAwait(false);
             }
 
-            OpenWriteWindow(context);
+            Begin(context, swaps);
         }
 
         return result;
@@ -66,34 +70,34 @@ internal sealed class MasqueSaveChangesInterceptor(MasqueEfSessions sessions) : 
     /// <inheritdoc />
     public override int SavedChanges(SaveChangesCompletedEventData eventData, int result)
     {
-        CloseWriteWindow(eventData.Context);
+        End(eventData.Context);
         return result;
     }
 
     /// <inheritdoc />
     public override ValueTask<int> SavedChangesAsync(SaveChangesCompletedEventData eventData, int result, CancellationToken cancellationToken = default)
     {
-        CloseWriteWindow(eventData.Context);
+        End(eventData.Context);
         return ValueTask.FromResult(result);
     }
 
     /// <inheritdoc />
-    public override void SaveChangesFailed(DbContextErrorEventData eventData) => CloseWriteWindow(eventData.Context);
+    public override void SaveChangesFailed(DbContextErrorEventData eventData) => End(eventData.Context);
 
     /// <inheritdoc />
     public override Task SaveChangesFailedAsync(DbContextErrorEventData eventData, CancellationToken cancellationToken = default)
     {
-        CloseWriteWindow(eventData.Context);
+        End(eventData.Context);
         return Task.CompletedTask;
     }
 
     /// <inheritdoc />
-    public override void SaveChangesCanceled(DbContextEventData eventData) => CloseWriteWindow(eventData.Context);
+    public override void SaveChangesCanceled(DbContextEventData eventData) => End(eventData.Context);
 
     /// <inheritdoc />
     public override Task SaveChangesCanceledAsync(DbContextEventData eventData, CancellationToken cancellationToken = default)
     {
-        CloseWriteWindow(eventData.Context);
+        End(eventData.Context);
         return Task.CompletedTask;
     }
 
@@ -120,55 +124,111 @@ internal sealed class MasqueSaveChangesInterceptor(MasqueEfSessions sessions) : 
         return changes;
     }
 
-    /// <summary>Refuses the save when a modified property maps to a column masked for the caller.</summary>
+    /// <summary>
+    /// Finds every token about to be written and the real value to write instead. Nothing is changed here, so a refusal
+    /// leaves the entities exactly as they were.
+    /// </summary>
     /// <remarks>The context's connection must be open: the masked columns come from the tables' reviewed configs.</remarks>
-    private void Refuse(DbContext context, List<EntityEntry> changes)
+    /// <exception cref="QueryRejectedException">A token is about to be written outside a masked column of its own type.</exception>
+    private List<TokenSwap> FindTokenSwaps(DbContext context, List<EntityEntry> changes)
     {
         var session = sessions.For(context.Database.GetDbConnection());
         session.Transaction = context.Database.CurrentTransaction?.GetDbTransaction();
         var grant = sessions.Grant(null);
-        var protectedByTable = new Dictionary<string, IReadOnlyDictionary<string, SensitiveDataType>>(StringComparer.OrdinalIgnoreCase);
+        var maskedByTable = new Dictionary<string, IReadOnlyDictionary<string, SensitiveDataType>>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var entry in changes.Where(e => e.State == EntityState.Modified))
+        // The type a property's column is masked as for this caller, or null when no column it maps to is masked.
+        SensitiveDataType? MaskedType(IProperty property)
         {
-            foreach (var property in entry.Properties.Where(p => p.IsModified))
+            foreach (var mapping in property.GetTableColumnMappings())
             {
-                foreach (var mapping in property.Metadata.GetTableColumnMappings())
+                var table = new TableReference(mapping.TableMapping.Table.Schema, mapping.TableMapping.Table.Name);
+                if (!maskedByTable.TryGetValue(table.Qualified, out var masked))
                 {
-                    var table = new TableReference(mapping.TableMapping.Table.Schema, mapping.TableMapping.Table.Name);
-                    if (!protectedByTable.TryGetValue(table.Qualified, out var masked))
-                    {
-                        masked = sessions.Gate.ProtectedColumns(session, table, grant);
-                        protectedByTable[table.Qualified] = masked;
-                    }
+                    masked = sessions.Gate.ProtectedColumns(session, table, grant);
+                    maskedByTable[table.Qualified] = masked;
+                }
 
-                    if (masked.TryGetValue(mapping.Column.Name, out var type))
-                    {
-                        throw new QueryRejectedException(
-                            $"Can't save {entry.Metadata.DisplayName()}.{property.Metadata.Name}: column {mapping.Column.Name} of " +
-                            $"{table.Qualified} is masked for this caller ({type}), so the entity holds a token, not the real value. " +
-                            "Change only unmasked properties, or have a caller who sees this column raw make the change.");
-                    }
+                if (masked.TryGetValue(mapping.Column.Name, out var type))
+                {
+                    return type;
+                }
+            }
+
+            return null;
+        }
+
+        var swaps = new List<TokenSwap>();
+        foreach (var entry in changes.Where(e => e.State is EntityState.Added or EntityState.Modified))
+        {
+            // An insert writes every property; an update writes only the modified ones.
+            var written = entry.Properties.Where(p => entry.State == EntityState.Added || p.IsModified);
+            foreach (var property in written)
+            {
+                if (property.CurrentValue is string text
+                    && sessions.Gate.ResolveWrittenValue(MaskedType(property.Metadata), text) is { } real)
+                {
+                    swaps.Add(new TokenSwap(property, text, real));
                 }
             }
         }
+
+        return swaps;
     }
 
-    /// <summary>Lets the context's statements through the database's guard until the save ends.</summary>
-    private void OpenWriteWindow(DbContext context)
+    /// <summary>Puts the real values in place and lets the context's statements through the database's guard until the save ends.</summary>
+    private void Begin(DbContext context, IReadOnlyList<TokenSwap> swaps)
     {
-        CloseWriteWindow(context);
-        var session = sessions.For(context.Database.GetDbConnection());
-        _writeWindows.Add(context, session.AllowWrites());
-    }
+        End(context);
+        var window = sessions.For(context.Database.GetDbConnection()).AllowWrites();
+        _saves.Add(context, new SaveInProgress(window, swaps));
 
-    /// <summary>Ends the context's write window, if one is open.</summary>
-    private void CloseWriteWindow(DbContext? context)
-    {
-        if (context is not null && _writeWindows.TryGetValue(context, out var window))
+        foreach (var swap in swaps)
         {
-            _writeWindows.Remove(context);
-            window.Dispose();
+            swap.Property.CurrentValue = swap.RealValue;
         }
     }
+
+    /// <summary>
+    /// Ends the context's save, if one is in progress: puts each token back in its entity and closes the write window.
+    /// After a successful save the property is marked unchanged again; after a failure it stays marked for saving, and
+    /// the next save swaps it again.
+    /// </summary>
+    private void End(DbContext? context)
+    {
+        if (context is null || !_saves.TryGetValue(context, out var save))
+        {
+            return;
+        }
+
+        _saves.Remove(context);
+        try
+        {
+            foreach (var swap in save.Swaps)
+            {
+                var accepted = swap.Property.EntityEntry.State == EntityState.Unchanged;
+                swap.Property.CurrentValue = swap.Token;
+                if (accepted)
+                {
+                    swap.Property.OriginalValue = swap.Token;
+                    swap.Property.IsModified = false;
+                }
+            }
+        }
+        finally
+        {
+            save.WriteWindow.Dispose();
+        }
+    }
+
+    /// <summary>A token about to be written, and the real value written in its place.</summary>
+    /// <param name="Property">The property being written.</param>
+    /// <param name="Token">The token the entity held, put back after the save.</param>
+    /// <param name="RealValue">The value written instead.</param>
+    private sealed record TokenSwap(PropertyEntry Property, string Token, string RealValue);
+
+    /// <summary>What a running save must undo when it ends.</summary>
+    /// <param name="WriteWindow">Closes the connection's write window.</param>
+    /// <param name="Swaps">The tokens to put back.</param>
+    private sealed record SaveInProgress(IDisposable WriteWindow, IReadOnlyList<TokenSwap> Swaps);
 }

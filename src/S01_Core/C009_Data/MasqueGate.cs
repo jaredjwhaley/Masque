@@ -334,11 +334,37 @@ public sealed class MasqueGate : IDisposable
     }
 
     /// <summary>
-    /// Swaps each token written as the whole value of a masked column of its type for a parameter holding its real
-    /// value, so what the caller saw is stored as what it stands for. A token written anywhere else would be stored as
-    /// a fake (or, swapped, land where it could be read), so the statement is refused. Values that aren't tokens are
-    /// written as given.
+    /// Decides what to store for a value a caller writes. A token written as the whole value of a masked column of its
+    /// type is stored as the real value it stands for, so what the caller saw is stored as what it stands for. A token
+    /// written anywhere else would be stored as a fake (or, swapped, land where it could be read), so it is refused.
+    /// Values that aren't tokens are stored as given. SQL writes and EF Core's SaveChanges both use this rule.
     /// </summary>
+    /// <param name="maskedType">The type of the masked column being written, or null when the column isn't masked for the caller (or isn't known).</param>
+    /// <param name="value">The value as the caller wrote it.</param>
+    /// <returns>The real value to store instead, or null when <paramref name="value"/> isn't a token and is stored as given.</returns>
+    /// <exception cref="QueryRejectedException">The value is a token, written outside a masked column of its own type.</exception>
+    internal string? ResolveWrittenValue(SensitiveDataType? maskedType, string value)
+    {
+        if (maskedType is { } type && _masker.TryResolveForWrite(type, value, out var real))
+        {
+            return real;
+        }
+
+        if (!_masker.IsToken(value))
+        {
+            return null;
+        }
+
+        // Never quote the value: it is a token, but the message may reach the caller's logs.
+        throw new QueryRejectedException(maskedType is null
+            ? "A value being written is a Masque token, but not as the whole value of a masked column, so it would be " +
+                "stored as a fake. Write a token only as the whole value of a masked column of its type (in SQL, name " +
+                "the INSERT's columns)."
+            : "A value being written to a masked column is a Masque token of a different type, so it would be stored as " +
+                "a fake. Write a token only into a masked column of its own type.");
+    }
+
+    /// <summary>Swaps each written token, as <see cref="ResolveWrittenValue"/> decides, for a parameter holding its real value.</summary>
     /// <exception cref="QueryRejectedException">A token is written outside a masked column of its own type.</exception>
     private List<TextEdit> WrittenValueEdits(DbCommand inner, StatementReview review, List<DbParameter> added)
     {
@@ -346,24 +372,9 @@ public sealed class MasqueGate : IDisposable
         foreach (var written in review.WrittenValues)
         {
             var candidate = written.Kind == TokenFilterKind.Literal ? written.Text : ParameterText(inner, written.Text);
-            if (candidate is null)
-            {
-                continue;
-            }
-
-            if (written.Type is { } type && _masker.TryResolveForWrite(type, candidate, out var value))
+            if (candidate is not null && ResolveWrittenValue(written.Type, candidate) is { } value)
             {
                 edits.Add(new TextEdit(written.Start, written.Length, AddMasqueParameter(inner, value, added)));
-            }
-            else if (_masker.IsToken(candidate))
-            {
-                // Never quote the value: it is a token, but the message may reach the caller's logs.
-                throw new QueryRejectedException(written.Type is null
-                    ? "A value being written is a Masque token, but not as the whole value of a masked column, so it " +
-                        "would be stored as a fake. Write a token only as the whole value of a masked column of its type, " +
-                        "and name the INSERT's columns."
-                    : "A value being written to a masked column is a Masque token of a different type, so it would be " +
-                        "stored as a fake. Write a token only into a masked column of its own type.");
             }
         }
 
