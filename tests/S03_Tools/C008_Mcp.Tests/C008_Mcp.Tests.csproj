@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <Compile Include="..\..\S01_Core\C002_Vault.Tests\TestSupport\FakeKeyProtector.cs" Link="Shared\FakeKeyProtector.cs" />
+    <Compile Include="..\..\S02_Adapters\C007_SqlServer.Tests\LocalDbFixture.cs" Link="Shared\LocalDbFixture.cs" />
   </ItemGroup>
 
   <ItemGroup>

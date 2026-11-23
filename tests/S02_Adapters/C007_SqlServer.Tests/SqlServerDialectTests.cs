@@ -10,61 +10,6 @@ using Microsoft.Data.SqlClient;
 namespace Masque.SqlServer.Tests;
 
 /// <summary>
-/// Creates a throwaway database, seeded with synthetic rows, and drops it afterwards. Uses the server in the
-/// MASQUE_TEST_SQLSERVER environment variable (a connection string without a database), else SQL Server LocalDB.
-/// When neither can be reached the tests are skipped, not failed.
-/// </summary>
-public sealed class LocalDbFixture : IDisposable
-{
-    private static readonly string Server = Environment.GetEnvironmentVariable("MASQUE_TEST_SQLSERVER")
-        ?? @"Server=(localdb)\MSSQLLocalDB;Integrated Security=true;TrustServerCertificate=true;Connect Timeout=15";
-
-    public LocalDbFixture()
-    {
-        DatabaseName = $"MasqueTest_{Guid.NewGuid():N}";
-        try
-        {
-            Execute(Server, $"CREATE DATABASE [{DatabaseName}]");
-            ConnectionString = $"{Server};Database={DatabaseName}";
-            Execute(ConnectionString, """
-                CREATE TABLE dbo.people (Id int PRIMARY KEY, FirstName nvarchar(50), Ssn char(11), GrossPay decimal(10,2));
-                CREATE TABLE dbo.visits (VisitId int PRIMARY KEY, PersonId int, Reason nvarchar(50));
-                INSERT dbo.people VALUES (1, N'Zebulon', '123-45-6789', 1234.50), (2, N'Lee', '987-65-4321', 980.00), (3, N'Ana', NULL, 20.25);
-                INSERT dbo.visits VALUES (10, 1, N'checkup'), (11, 1, N'flu'), (12, 2, N'checkup');
-                """);
-        }
-        catch (SqlException)
-        {
-            ConnectionString = null;
-        }
-    }
-
-    public string DatabaseName { get; }
-
-    /// <summary>Null when LocalDB isn't available.</summary>
-    public string? ConnectionString { get; }
-
-    public void Dispose()
-    {
-        if (ConnectionString is null)
-        {
-            return;
-        }
-
-        SqlConnection.ClearAllPools();
-        Execute(Server, $"ALTER DATABASE [{DatabaseName}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{DatabaseName}];");
-    }
-
-    public static void Execute(string connectionString, string sql)
-    {
-        using var connection = new SqlConnection(connectionString);
-        connection.Open();
-        using var command = new SqlCommand(sql, connection);
-        command.ExecuteNonQuery();
-    }
-}
-
-/// <summary>
 /// Pins down the SQL Server dialect against a real server: tables are listed with their schema, result columns
 /// report their source column through browse mode, hidden key columns never show, errors that can quote data are
 /// hidden, and a wrapped connection masks results end to end.
