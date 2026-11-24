@@ -19,12 +19,12 @@ internal sealed class MasqueCommandInterceptor(MasqueEfSessions sessions) : DbCo
     /// <inheritdoc />
     public override InterceptionResult<DbDataReader> ReaderExecuting(
         DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result) =>
-        Skip(eventData, result.HasResult) ? result : InterceptionResult<DbDataReader>.SuppressWithResult(ExecuteReader(command));
+        Skip(command, eventData, result.HasResult) ? result : InterceptionResult<DbDataReader>.SuppressWithResult(ExecuteReader(command));
 
     /// <inheritdoc />
     public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
         DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result, CancellationToken cancellationToken = default) =>
-        Skip(eventData, result.HasResult)
+        Skip(command, eventData, result.HasResult)
             ? result
             : InterceptionResult<DbDataReader>.SuppressWithResult(await ExecuteReaderAsync(command, cancellationToken).ConfigureAwait(false));
 
@@ -32,7 +32,7 @@ internal sealed class MasqueCommandInterceptor(MasqueEfSessions sessions) : DbCo
     public override InterceptionResult<object> ScalarExecuting(
         DbCommand command, CommandEventData eventData, InterceptionResult<object> result)
     {
-        if (Skip(eventData, result.HasResult))
+        if (Skip(command, eventData, result.HasResult))
         {
             return result;
         }
@@ -45,7 +45,7 @@ internal sealed class MasqueCommandInterceptor(MasqueEfSessions sessions) : DbCo
     public override async ValueTask<InterceptionResult<object>> ScalarExecutingAsync(
         DbCommand command, CommandEventData eventData, InterceptionResult<object> result, CancellationToken cancellationToken = default)
     {
-        if (Skip(eventData, result.HasResult))
+        if (Skip(command, eventData, result.HasResult))
         {
             return result;
         }
@@ -59,7 +59,7 @@ internal sealed class MasqueCommandInterceptor(MasqueEfSessions sessions) : DbCo
     public override InterceptionResult<int> NonQueryExecuting(
         DbCommand command, CommandEventData eventData, InterceptionResult<int> result)
     {
-        if (Skip(eventData, result.HasResult))
+        if (Skip(command, eventData, result.HasResult))
         {
             return result;
         }
@@ -79,7 +79,7 @@ internal sealed class MasqueCommandInterceptor(MasqueEfSessions sessions) : DbCo
     public override async ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
         DbCommand command, CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
     {
-        if (Skip(eventData, result.HasResult))
+        if (Skip(command, eventData, result.HasResult))
         {
             return result;
         }
@@ -96,11 +96,25 @@ internal sealed class MasqueCommandInterceptor(MasqueEfSessions sessions) : DbCo
     }
 
     /// <summary>
-    /// Whether to let EF Core run the command untouched: SaveChanges commands (checked by the SaveChanges
-    /// interceptor) and commands another interceptor already answered.
+    /// Whether to let EF Core run the command itself: commands another interceptor already answered, and SaveChanges
+    /// commands (checked by the SaveChanges interceptor), whose masked key tokens are first swapped for the real values
+    /// their rows store, so EF Core finds those rows.
     /// </summary>
-    private static bool Skip(CommandEventData eventData, bool alreadyAnswered) =>
-        alreadyAnswered || eventData.CommandSource == CommandSource.SaveChanges;
+    private bool Skip(DbCommand command, CommandEventData eventData, bool alreadyAnswered)
+    {
+        if (alreadyAnswered)
+        {
+            return true;
+        }
+
+        if (eventData.CommandSource != CommandSource.SaveChanges)
+        {
+            return false;
+        }
+
+        sessions.Keys.Apply(eventData.Context, command);
+        return true;
+    }
 
     /// <summary>Checks the command and runs it, returning a masking reader that owns the prepared command.</summary>
     private DbDataReader ExecuteReader(DbCommand command)

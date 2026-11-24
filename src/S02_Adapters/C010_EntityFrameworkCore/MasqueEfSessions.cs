@@ -22,6 +22,9 @@ internal sealed class MasqueEfSessions(MasqueGate gate, IReadOnlyCollection<Sens
     /// <summary>The gate that checks statements and masks results.</summary>
     public MasqueGate Gate { get; } = gate;
 
+    /// <summary>The real values of masked keys for saves in progress, shared by the SaveChanges and command interceptors.</summary>
+    public MaskedKeyValues Keys { get; } = new();
+
     /// <summary>
     /// The session for a raw connection, started on first use. A connection that is already open (one handed to
     /// EF Core open) gets the dialect's guard now, since EF Core won't report opening it.

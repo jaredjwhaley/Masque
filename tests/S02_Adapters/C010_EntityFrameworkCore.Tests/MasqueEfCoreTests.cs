@@ -289,6 +289,21 @@ public sealed class MasqueEfCoreTests
         context.Entry(member).State.ShouldBe(EntityState.Unchanged);
     }
 
+    /// <summary><c>SaveChangesAsync</c> finds the row behind a masked key the same way the sync save does.</summary>
+    [Fact]
+    public async Task Saving_async_an_entity_whose_key_is_masked_updates_its_row()
+    {
+        using var harness = new EfHarness();
+        await using var context = harness.Context(harness.Gate(Writer));
+        var cancel = TestContext.Current.CancellationToken;
+        var member = await context.Members.SingleAsync(cancel);
+
+        member.Visits = 5;
+        await context.SaveChangesAsync(cancel);
+
+        harness.RawScalar("SELECT Visits FROM Members WHERE Ssn = '900-11-1111'").ShouldBe(5L);
+    }
+
     /// <summary>
     /// One SSN stored in two spellings gets one token with two spellings. Writing that token back into a row (here
     /// <c>Update()</c>, which marks every property modified) must keep the spelling the row already had: picking one
@@ -311,5 +326,44 @@ public sealed class MasqueEfCoreTests
         harness.RawScalar("SELECT Visits FROM People WHERE Id = 10").ShouldBe(2L);
         harness.RawScalar("SELECT Ssn FROM People WHERE Id = 10").ShouldBe("900111111");
         harness.RawScalar("SELECT Ssn FROM People WHERE Id = 1").ShouldBe(AliceSsn);
+    }
+
+    /// <summary>
+    /// Deleting finds the row by its key too (<c>DELETE ... WHERE Ssn = @p</c>), so a masked key holding a token must
+    /// reach the real row there as well.
+    /// </summary>
+    [Fact]
+    public void Deleting_an_entity_whose_key_is_masked_removes_its_row()
+    {
+        using var harness = new EfHarness();
+        using var context = harness.Context(harness.Gate(Writer));
+        var member = context.Members.Single();
+
+        context.Members.Remove(member);
+        context.SaveChanges();
+
+        harness.RawScalar("SELECT COUNT(*) FROM Members").ShouldBe(0L);
+    }
+
+    /// <summary>
+    /// One SSN stored as two separate keys (<c>900-11-1111</c> and <c>900111111</c>, the same person entered twice)
+    /// gets one token, so a loaded entity can't say which row it came from. Saving it must be refused with a message
+    /// that says so, and neither row may change: matching both would update a row the caller never loaded.
+    /// </summary>
+    [Fact]
+    public void Saving_a_masked_key_stored_in_two_spellings_is_refused_and_changes_nothing()
+    {
+        using var harness = new EfHarness();
+        harness.Run("INSERT INTO Members VALUES ('900111111', 7)");
+        using var context = harness.Context(harness.Gate(Writer));
+        var member = context.Members.Single(m => m.Visits == 3);
+
+        member.Visits = 4;
+
+        var refusal = Should.Throw<QueryRejectedException>(() => context.SaveChanges());
+        refusal.Message.ShouldContain("2 rows");
+        refusal.Message.ShouldNotContain("900");
+        harness.RawScalar("SELECT Visits FROM Members WHERE Ssn = '900-11-1111'").ShouldBe(3L);
+        harness.RawScalar("SELECT Visits FROM Members WHERE Ssn = '900111111'").ShouldBe(7L);
     }
 }

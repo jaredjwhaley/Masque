@@ -364,6 +364,16 @@ public sealed class MasqueGate : IDisposable
                 "a fake. Write a token only into a masked column of its own type.");
     }
 
+    /// <summary>
+    /// Every form a token's real value may be stored in: its normalized value and each spelling the data was seen to
+    /// store it in. Adapters that must find or keep a row's own spelling (EF Core's SaveChanges) compare with these.
+    /// </summary>
+    /// <param name="maskedType">The masked column's type.</param>
+    /// <param name="value">A value that may be a token of that type.</param>
+    /// <returns>The stored forms, or null when <paramref name="value"/> isn't a token of <paramref name="maskedType"/>.</returns>
+    internal IReadOnlyList<string>? StoredForms(SensitiveDataType maskedType, string value) =>
+        _masker.TryResolve(maskedType, value, out var forms) ? forms : null;
+
     /// <summary>Swaps each written token, as <see cref="ResolveWrittenValue"/> decides, for a parameter holding its real value.</summary>
     /// <exception cref="QueryRejectedException">A token is written outside a masked column of its own type.</exception>
     private List<TextEdit> WrittenValueEdits(DbCommand inner, StatementReview review, List<DbParameter> added)
