@@ -122,19 +122,33 @@ public sealed class MasqueToolService(ISourceResolver sources, MasqueGate gate) 
 
     /// <summary>
     /// Runs one INSERT, UPDATE or DELETE, if the policy lets the assistant write. On CSV or Excel data the write runs
-    /// on an in-memory copy and is then saved back to the files it changed, each with a backup of its previous version.
+    /// on an in-memory copy and is then saved: back to the files it changed, each with a backup of its previous
+    /// version, or with <paramref name="saveAs"/> to a new file beside the source, which is left unchanged.
     /// </summary>
     /// <param name="source">A named source, a database, CSV or Excel file, or a folder of CSV and Excel files.</param>
     /// <param name="sql">One INSERT, UPDATE or DELETE statement.</param>
-    /// <returns>The reply, with the number of rows changed and any files saved.</returns>
-    public ToolReply Execute(string source, string sql) => Guarded(() =>
+    /// <param name="saveAs">
+    /// Optional, for a single CSV or Excel file: the new file's name (or a path in the source's folder). It must not
+    /// exist yet and must keep the source's extension.
+    /// </param>
+    /// <returns>The reply, with the number of rows changed and any files saved; never data.</returns>
+    public ToolReply Execute(string source, string sql, string? saveAs = null) => Guarded(() =>
     {
         if (SqlStatement.Parse(sql).Kind == StatementKind.Select)
         {
             return Error("masque_execute runs INSERT, UPDATE or DELETE only. Use masque_query for SELECT.");
         }
 
+        var copyName = string.IsNullOrWhiteSpace(saveAs) ? null : saveAs.Trim();
+
         using var opened = sources.Open(source, writable: true);
+
+        // Checked before the statement runs, so a database is never changed by a call that can't be honoured.
+        if (copyName is not null && opened.Files is not { FileCount: 1 })
+        {
+            return Error(LoadedFiles.OneFileForSaveAs);
+        }
+
         using var connection = gate.Wrap(opened.Connection);
         using var command = connection.CreateCommand();
         command.CommandText = sql;
@@ -142,8 +156,8 @@ public sealed class MasqueToolService(ISourceResolver sources, MasqueGate gate) 
         try
         {
             var changed = command.ExecuteNonQuery();
-            var saved = opened.Files?.SaveChanges() ?? [];
-            return new ToolReply(ReplyFormatter.Executed(opened.Name, changed, saved), IsError: false);
+            var saved = opened.Files?.SaveChanges(copyName) ?? [];
+            return new ToolReply(ReplyFormatter.Executed(opened.Name, changed, saved, copyRequested: copyName is not null), IsError: false);
         }
         catch (ReviewRequiredException ex)
         {

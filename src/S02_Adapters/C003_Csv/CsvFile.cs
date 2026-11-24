@@ -52,14 +52,29 @@ public sealed class CsvFile : ITableFile
     /// <inheritdoc />
     public string Save(IReadOnlyList<TableChanges> changes)
     {
+        var rows = Apply(OnlyChanges(changes));
+        return FileReplacer.Replace(Path, _stamp, stream => Write(stream, rows));
+    }
+
+    /// <inheritdoc />
+    public string SaveCopy(IReadOnlyList<TableChanges> changes, string copyPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(copyPath);
+
+        var rows = Apply(OnlyChanges(changes));
+        return FileCopyWriter.Write(Path, _stamp, copyPath, stream => Write(stream, rows));
+    }
+
+    /// <summary>The one table's changes; a CSV file holds a single table.</summary>
+    private static TableChanges OnlyChanges(IReadOnlyList<TableChanges> changes)
+    {
         ArgumentNullException.ThrowIfNull(changes);
         if (changes.Count != 1)
         {
             throw new ArgumentException("A CSV file holds one table, so it takes one set of changes.", nameof(changes));
         }
 
-        var rows = Apply(changes[0]);
-        return FileReplacer.Replace(Path, _stamp, stream => Write(stream, rows));
+        return changes[0];
     }
 
     /// <summary>The file's rows after the changes: updated cells, deleted rows dropped, inserted rows at the end.</summary>

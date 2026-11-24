@@ -91,9 +91,27 @@ public sealed class CsvFileTests : IDisposable
 
         var backup = file.Save([Changes(deleted: [0])]);
 
-        backup.ShouldStartWith(_path + ".");
-        backup.ShouldEndWith(".masque-backup");
+        backup.ShouldStartWith(Path.Combine(_folder, "people."));
+        backup.ShouldEndWith(".masque-backup.csv");
         File.ReadAllText(backup, Encoding.UTF8).ShouldBe(Original);
+        Directory.GetFiles(_folder).Length.ShouldBe(2);
+    }
+
+    /// <summary>
+    /// Saving as a copy writes the changed file under the new name beside the source, keeping the source's delimiter
+    /// and byte order mark, and leaves the source exactly as it was, with no backup made.
+    /// </summary>
+    [Fact]
+    public void SaveCopy_WritesTheCopyAndLeavesTheSource()
+    {
+        var file = CsvFile.Open(_path);
+
+        var copy = file.SaveCopy([Changes(deleted: [0])], "people-new.csv");
+
+        copy.ShouldBe(Path.Combine(_folder, "people-new.csv"));
+        Text().ShouldBe(Original);
+        File.ReadAllBytes(copy).Take(3).ShouldBe(new byte[] { 0xEF, 0xBB, 0xBF });
+        File.ReadAllText(copy, Encoding.UTF8).ShouldBe("Id;Zip;Pay;Name\n2;60601;980;Lee\n3;73301;12.25;\n");
         Directory.GetFiles(_folder).Length.ShouldBe(2);
     }
 

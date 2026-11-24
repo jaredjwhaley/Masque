@@ -20,6 +20,8 @@ public sealed class MasqueToolServiceTests : IDisposable
     private const string FirstName = "Zebulon";
     private const string Email = "zebulon.quark@example.com";
     private const string Note = "allergic to penicillin";
+    private const string PayrollName = "Ana Zed";
+    private const string PayrollSsn = "900-11-1111";
 
     private const string AssistantSeesEmail =
         """{ "default": { "rawTypes": [], "canWrite": false }, "rules": [ { "name": "ai", "users": ["assistant"], "groups": [], "rawTypes": ["Email"], "canWrite": false } ] }""";
@@ -88,6 +90,42 @@ public sealed class MasqueToolServiceTests : IDisposable
         sheet.Cell("B3").Value = new DateTime(2026, 2, 9);
         workbook.SaveAs(path);
         return path;
+    }
+
+    /// <summary>
+    /// A payroll-shaped workbook (synthetic values) with one "Export" sheet: names, SSNs, a PayDate column of real
+    /// dates shown as mm/dd/yyyy, and hours.
+    /// </summary>
+    private string PayrollWorkbook()
+    {
+        var path = Path.Combine(_data, "export.xlsx");
+        using var workbook = new XLWorkbook();
+        var sheet = workbook.AddWorksheet("Export");
+        sheet.Cell("A1").Value = "EmployeeName";
+        sheet.Cell("B1").Value = "Ssn";
+        sheet.Cell("C1").Value = "PayDate";
+        sheet.Cell("D1").Value = "Hours";
+        (string Name, string Ssn, int Hours)[] rows = [(PayrollName, PayrollSsn, 40), ("Bo Yen", "900-22-2222", 32), ("Cy Xu", "900-33-3333", 38)];
+        for (var r = 0; r < rows.Length; r++)
+        {
+            sheet.Cell(r + 2, 1).Value = rows[r].Name;
+            sheet.Cell(r + 2, 2).Value = rows[r].Ssn;
+            sheet.Cell(r + 2, 3).Value = new DateTime(2026, 11, 20);
+            sheet.Cell(r + 2, 4).Value = rows[r].Hours;
+        }
+
+        sheet.Range("C2:C4").Style.NumberFormat.Format = "mm/dd/yyyy";
+        workbook.SaveAs(path);
+        return path;
+    }
+
+    /// <summary>Checks a reply holds none of the payroll workbook's values, the old pay date included.</summary>
+    private static void ShouldHoldNoPayrollValues(ToolReply reply)
+    {
+        foreach (var value in new[] { PayrollName, PayrollSsn, "Bo Yen", "900-22-2222", "2026-11-20", "11/20/2026" })
+        {
+            reply.Text.ShouldNotContain(value, Case.Insensitive);
+        }
     }
 
     /// <summary>A SQLite database named "clinic" in sources.json, with one synthetic patient.</summary>
@@ -430,10 +468,10 @@ public sealed class MasqueToolServiceTests : IDisposable
 
         reply.IsError.ShouldBeFalse(reply.Text);
         reply.Text.ShouldContain("1 row changed");
-        reply.Text.ShouldContain(".masque-backup");
+        reply.Text.ShouldContain(".masque-backup.csv");
         ShouldHoldNoRealValues(reply);
         File.ReadAllLines(path)[2].ShouldEndWith(",980.00,X,");
-        Directory.GetFiles(_data, "people.csv.*.masque-backup").ShouldHaveSingleItem();
+        Directory.GetFiles(_data, "people.*.masque-backup.csv").ShouldHaveSingleItem();
     }
 
     /// <summary>A token written to a masked CSV column is saved to the file as the real value it stands for.</summary>
@@ -485,6 +523,142 @@ public sealed class MasqueToolServiceTests : IDisposable
         reply.Text.ShouldNotContain("backup");
         File.ReadAllText(path).ShouldBe(before);
         Directory.GetFiles(_data).ShouldHaveSingleItem();
+    }
+
+    /// <summary>
+    /// The weekly payroll job end to end: PayDate is masked when read, yet an UPDATE may set it to a date the
+    /// assistant supplies; with saveAs the change goes to a new workbook beside the source, which is left byte for
+    /// byte as it was. The reply gives the row count and the copy's name, and no value from the file.
+    /// </summary>
+    [Fact]
+    public void Execute_SaveAs_SetsPayDateOnACopy()
+    {
+        var path = PayrollWorkbook();
+        var before = File.ReadAllBytes(path);
+        using var service = ServiceWithPolicy(AssistantCanWrite);
+        Reviewed(service, path);
+        ShouldHoldNoPayrollValues(service.Query(path, "SELECT PayDate FROM Export", 5));
+
+        var reply = service.Execute(path, "UPDATE Export SET PayDate = '2026-11-27'", saveAs: "export-2026-11-27.xlsx");
+
+        reply.IsError.ShouldBeFalse(reply.Text);
+        reply.Text.ShouldContain("3 rows changed");
+        reply.Text.ShouldContain("export-2026-11-27.xlsx");
+        reply.Text.ShouldContain("export.xlsx was not changed");
+        reply.Text.ShouldNotContain("backup");
+        ShouldHoldNoPayrollValues(reply);
+        File.ReadAllBytes(path).ShouldBe(before);
+        using var workbook = new XLWorkbook(Path.Combine(_data, "export-2026-11-27.xlsx"));
+        var sheet = workbook.Worksheet("Export");
+        for (var row = 2; row <= 4; row++)
+        {
+            sheet.Cell(row, 3).GetDateTime().ShouldBe(new DateTime(2026, 11, 27));
+            sheet.Cell(row, 3).Style.NumberFormat.Format.ShouldBe("mm/dd/yyyy");
+        }
+
+        sheet.Cell("A2").GetText().ShouldBe(PayrollName);
+    }
+
+    /// <summary>A WHERE filter on a masked column works with a token the assistant was shown: only that row changes.</summary>
+    [Fact]
+    public void Execute_TokenFilterOnWorkbook_UpdatesOnlyThatRow()
+    {
+        var path = PayrollWorkbook();
+        using var service = ServiceWithPolicy(AssistantCanWrite);
+        Reviewed(service, path);
+        var token = LastRow(service.Query(path, "SELECT Ssn FROM Export WHERE Hours = 32", 5)).Trim('|', ' ');
+
+        var reply = service.Execute(path, $"UPDATE Export SET PayDate = '2026-11-27' WHERE Ssn = '{token}'", saveAs: "copy.xlsx");
+
+        reply.IsError.ShouldBeFalse(reply.Text);
+        reply.Text.ShouldContain("1 row changed");
+        ShouldHoldNoPayrollValues(reply);
+        using var workbook = new XLWorkbook(Path.Combine(_data, "copy.xlsx"));
+        var sheet = workbook.Worksheet("Export");
+        sheet.Cell("C2").GetDateTime().ShouldBe(new DateTime(2026, 11, 20));
+        sheet.Cell("C3").GetDateTime().ShouldBe(new DateTime(2026, 11, 27));
+        sheet.Cell("C4").GetDateTime().ShouldBe(new DateTime(2026, 11, 20));
+    }
+
+    /// <summary>A statement that changes no rows writes no copy, and the reply says why.</summary>
+    [Fact]
+    public void Execute_SaveAsChangingNothing_WritesNoCopy()
+    {
+        var path = PayrollWorkbook();
+        using var service = ServiceWithPolicy(AssistantCanWrite);
+        Reviewed(service, path);
+
+        var reply = service.Execute(path, "UPDATE Export SET PayDate = '2026-11-27' WHERE Hours = 99", saveAs: "copy.xlsx");
+
+        reply.IsError.ShouldBeFalse(reply.Text);
+        reply.Text.ShouldContain("0 rows changed");
+        reply.Text.ShouldContain("no copy");
+        Directory.GetFiles(_data).ShouldHaveSingleItem();
+    }
+
+    /// <summary>A copy outside the source's folder is refused through the tool, and nothing is written anywhere.</summary>
+    [Fact]
+    public void Execute_SaveAsOtherFolder_IsRefused()
+    {
+        var path = PayrollWorkbook();
+        using var service = ServiceWithPolicy(AssistantCanWrite);
+        Reviewed(service, path);
+        var outside = Path.Combine(_folder, "copy.xlsx");
+
+        var reply = service.Execute(path, "UPDATE Export SET PayDate = '2026-11-27'", saveAs: outside);
+
+        reply.IsError.ShouldBeTrue();
+        reply.Text.ShouldContain("same folder");
+        ShouldHoldNoPayrollValues(reply);
+        File.Exists(outside).ShouldBeFalse();
+    }
+
+    /// <summary>saveAs is for one CSV or Excel file; on a database it is refused before anything runs.</summary>
+    [Fact]
+    public void Execute_SaveAsOnDatabase_IsRefused()
+    {
+        ClinicSource();
+        using var service = ServiceWithPolicy(AssistantCanWrite);
+        Reviewed(service, "clinic", ("Visits", SensitiveDataType.Safe));
+
+        var reply = service.Execute("clinic", "UPDATE patients SET Visits = 4", saveAs: "copy.db");
+
+        reply.IsError.ShouldBeTrue();
+        reply.Text.ShouldContain("saveAs");
+        LastRow(service.Query("clinic", "SELECT Visits FROM patients", 5)).ShouldBe("| 3 |");
+    }
+
+    /// <summary>saveAs on a folder holding several files is refused, since one copy name can't stand for several files.</summary>
+    [Fact]
+    public void Execute_SaveAsOnFolderOfSeveralFiles_IsRefused()
+    {
+        var people = PeopleCsv();
+        VisitsWorkbook();
+        var before = File.ReadAllText(people);
+        using var service = ServiceWithPolicy(AssistantCanWrite);
+        Reviewed(service, _data);
+
+        var reply = service.Execute(_data, "UPDATE people SET Status = 'X'", saveAs: "copy.csv");
+
+        reply.IsError.ShouldBeTrue();
+        reply.Text.ShouldContain("saveAs");
+        ShouldHoldNoRealValues(reply);
+        File.ReadAllText(people).ShouldBe(before);
+        Directory.GetFiles(_data).Length.ShouldBe(2);
+    }
+
+    /// <summary>Masque's own backups in a folder are not loaded as tables, so they never show up or get queried.</summary>
+    [Fact]
+    public void Describe_Folder_SkipsMasqueBackups()
+    {
+        PeopleCsv();
+        File.Copy(Path.Combine(_data, "people.csv"), Path.Combine(_data, "people.20261124-153000.masque-backup.csv"));
+
+        var reply = _service.Describe(_data);
+
+        reply.IsError.ShouldBeFalse(reply.Text);
+        reply.Text.ShouldNotContain("20261124");
+        reply.Text.ShouldNotContain("masque_backup", Case.Insensitive);
     }
 
     /// <summary>masque_execute doesn't read; a SELECT sent to it points the assistant at masque_query.</summary>

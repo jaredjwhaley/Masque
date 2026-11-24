@@ -56,21 +56,32 @@ public sealed class MasqueTools(MasqueToolService service)
         ToResult(service.Query(source, sql, maxRows, allowTypes));
 
     /// <summary>Runs one INSERT, UPDATE or DELETE through Masque's write checks.</summary>
-    /// <param name="source">A named database source or a database file.</param>
+    /// <param name="source">A named source, a database, or a CSV or Excel file or folder.</param>
     /// <param name="sql">One INSERT, UPDATE or DELETE statement.</param>
+    /// <param name="saveAs">Optional new file name for a CSV or Excel source; the source is then left unchanged.</param>
     /// <returns>The tool result.</returns>
     [McpServerTool(Name = "masque_execute", Title = "Change data through Masque", ReadOnly = false, Destructive = true,
         Idempotent = false, OpenWorld = false)]
     [Description("""
-        Runs one INSERT, UPDATE or DELETE against a SQLite or SQL Server source, if the Masque policy lets the
-        assistant write. Returns the number of rows changed, never data. Masque refuses an UPDATE that sets a masked
-        column and any statement that copies a masked column into another column. CSV and Excel sources are
-        read-only. Always confirm the exact statement with the user before calling this tool.
+        Runs one INSERT, UPDATE or DELETE against a SQLite, SQL Server, CSV or Excel source, if the Masque policy lets
+        the assistant write. Returns the number of rows changed and the files saved, never data.
+        A masked column may be set to a value you supply (a literal or NULL), such as
+        UPDATE Sheet1 SET PayDate = '2026-11-27'; write dates as yyyy-MM-dd and Excel stores them as dates in the
+        column's format. A token you were shown, written into a masked column of its type, is saved as the real value
+        it stands for. WHERE filters work as in masque_query, tokens included. Copying a masked column into another
+        column, expressions and INSERT ... SELECT on masked columns are refused.
+        CSV and Excel: by default the file is replaced and its previous version kept beside it as a backup. Pass saveAs
+        to write the result to a new file in the same folder instead (it must not exist and keeps the source's
+        extension); the source file is not changed. Excel saves need .xlsx and refuse formula cells, charts and
+        pivot tables.
+        Always confirm the exact statement and file with the user before calling this tool.
         """)]
     public CallToolResult Execute(
-        [Description("Same as masque_describe's source; must be a SQLite or SQL Server database.")] string source,
-        [Description("One INSERT, UPDATE or DELETE statement.")] string sql) =>
-        ToResult(service.Execute(source, sql));
+        [Description("Same as masque_describe's source.")] string source,
+        [Description("One INSERT, UPDATE or DELETE statement.")] string sql,
+        [Description("Optional, for a single CSV or Excel file: the new file's name (for example \"export-2026-11-27.xlsx\") or its full path in the source's folder. Leave out to save over the source with a backup.")]
+        string? saveAs = null) =>
+        ToResult(service.Execute(source, sql, saveAs));
 
     private static CallToolResult ToResult(ToolReply reply) => new()
     {

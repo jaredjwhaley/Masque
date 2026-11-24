@@ -4,10 +4,11 @@ using Microsoft.Data.Sqlite;
 
 namespace Masque.Mcp;
 
-/// <summary>A file that a write was saved to.</summary>
-/// <param name="Path">The file.</param>
-/// <param name="BackupPath">The backup holding its previous version.</param>
-public sealed record SavedFile(string Path, string BackupPath);
+/// <summary>A file that a write was saved to: either the source itself (with a backup) or a new copy of it.</summary>
+/// <param name="Path">The file written.</param>
+/// <param name="BackupPath">When the source was replaced: the backup holding its previous version. Null for a copy.</param>
+/// <param name="CopiedFrom">When a copy was written: the source it was made from, left unchanged. Null otherwise.</param>
+public sealed record SavedFile(string Path, string? BackupPath, string? CopiedFrom = null);
 
 /// <summary>One loaded table and where it came from.</summary>
 /// <param name="File">The file it was read from.</param>
@@ -21,6 +22,10 @@ public sealed record LoadedTable(ITableFile File, int Index, TableData Table);
 /// </summary>
 public sealed class LoadedFiles
 {
+    /// <summary>Why saveAs needs a single file; shared with the tool's up-front check.</summary>
+    internal const string OneFileForSaveAs =
+        "saveAs works only when the source is one CSV or Excel file, since one copy name can't stand for several files or a database. Nothing was changed.";
+
     private readonly SqliteConnection _connection;
     private readonly IReadOnlyList<LoadedTable> _tables;
 
@@ -36,11 +41,25 @@ public sealed class LoadedFiles
     /// <summary>The in-memory copy. Its owner (the <see cref="OpenedSource"/>) disposes it.</summary>
     public SqliteConnection Connection => _connection;
 
-    /// <summary>Saves every change made to the copy back to its file, leaving files with no changes alone.</summary>
-    /// <returns>The files saved, each with its backup.</returns>
-    /// <exception cref="TableFileException">A change can't be saved; that file is left as it was.</exception>
-    public IReadOnlyList<SavedFile> SaveChanges()
+    /// <summary>How many files the tables came from (a folder can hold several).</summary>
+    public int FileCount => _tables.Select(t => t.File).Distinct().Count();
+
+    /// <summary>
+    /// Saves every change made to the in-memory copy, leaving files with no changes alone: back to each changed file
+    /// (with a backup), or, when <paramref name="saveAs"/> is given, to a new file beside the one source file.
+    /// </summary>
+    /// <param name="saveAs">The new file's name or path, in the source's folder; null to save to the source.</param>
+    /// <returns>The files saved; empty when nothing changed.</returns>
+    /// <exception cref="TableFileException">
+    /// A change can't be saved, or <paramref name="saveAs"/> is given for tables from several files. No file is changed.
+    /// </exception>
+    public IReadOnlyList<SavedFile> SaveChanges(string? saveAs = null)
     {
+        if (saveAs is not null && FileCount != 1)
+        {
+            throw new TableFileException(OneFileForSaveAs);
+        }
+
         var changes = SqliteSources.ReadChanges(_connection, [.. _tables.Select(t => t.Table)]);
 
         var saved = new List<SavedFile>();
@@ -57,7 +76,9 @@ public sealed class LoadedFiles
 
             if (perTable.Any(change => !change.IsEmpty))
             {
-                saved.Add(new SavedFile(file.Path, file.Save(perTable)));
+                saved.Add(saveAs is null
+                    ? new SavedFile(file.Path, file.Save(perTable))
+                    : new SavedFile(file.SaveCopy(perTable, saveAs), BackupPath: null, CopiedFrom: file.Path));
             }
         }
 

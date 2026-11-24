@@ -98,12 +98,13 @@ public static class ReplyFormatter
         return text.ToString();
     }
 
-    /// <summary>Reports a write, and each file it was saved to with that file's backup. Names files, never data.</summary>
+    /// <summary>Reports a write: how many rows changed and which files were saved. Names files, never data.</summary>
     /// <param name="source">The source's display name.</param>
-    /// <param name="rowsChanged">The number of rows the statement changed.</param>
-    /// <param name="saved">CSV or Excel files the write was saved to; empty for databases.</param>
+    /// <param name="rowsChanged">The rows the statement changed.</param>
+    /// <param name="saved">The files saved: sources replaced (with backups) or new copies.</param>
+    /// <param name="copyRequested">Whether the call asked for a copy (saveAs), so an empty save can say why there's none.</param>
     /// <returns>The reply text.</returns>
-    public static string Executed(string source, int rowsChanged, IReadOnlyList<SavedFile> saved)
+    public static string Executed(string source, int rowsChanged, IReadOnlyList<SavedFile> saved, bool copyRequested = false)
     {
         ArgumentNullException.ThrowIfNull(saved);
 
@@ -111,8 +112,21 @@ public static class ReplyFormatter
             string.Create(CultureInfo.InvariantCulture, $"{source}: {Count(Math.Max(rowsChanged, 0), "row")} changed."));
         foreach (var file in saved)
         {
-            text.Append(CultureInfo.InvariantCulture,
-                $" Saved {file.Path}; its previous version is in {Path.GetFileName(file.BackupPath)} in the same folder.");
+            if (file.CopiedFrom is not null)
+            {
+                text.Append(CultureInfo.InvariantCulture,
+                    $" Saved a copy as {file.Path}; {Path.GetFileName(file.CopiedFrom)} was not changed.");
+            }
+            else
+            {
+                text.Append(CultureInfo.InvariantCulture,
+                    $" Saved {file.Path}; its previous version is in {Path.GetFileName(file.BackupPath)} in the same folder.");
+            }
+        }
+
+        if (copyRequested && saved.Count == 0)
+        {
+            text.Append(" Nothing in the file changed, so no copy was saved.");
         }
 
         return text.ToString();

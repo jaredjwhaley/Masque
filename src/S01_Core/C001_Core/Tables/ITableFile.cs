@@ -21,6 +21,20 @@ public interface ITableFile
     /// The file changed on disk since it was read, or a change can't be saved safely. The file is left as it was.
     /// </exception>
     string Save(IReadOnlyList<TableChanges> changes);
+
+    /// <summary>
+    /// Writes the file with the changes applied to a new file beside it ("save as"), leaving this file untouched and
+    /// making no backup. The same checks as <see cref="Save"/> run first; the copy's rules are
+    /// <see cref="FileCopyWriter"/>'s (same folder, same extension, never overwrite).
+    /// </summary>
+    /// <param name="changes">One entry per table in <see cref="Tables"/>, in the same order.</param>
+    /// <param name="copyPath">The copy's file name, or a path in this file's folder.</param>
+    /// <returns>The copy's full path.</returns>
+    /// <exception cref="TableFileException">
+    /// This file changed on disk since it was read, a change can't be saved safely, or the copy's name breaks a rule.
+    /// No file is written.
+    /// </exception>
+    string SaveCopy(IReadOnlyList<TableChanges> changes, string copyPath);
 }
 
 /// <summary>

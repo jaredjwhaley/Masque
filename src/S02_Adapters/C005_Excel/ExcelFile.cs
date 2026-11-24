@@ -47,6 +47,25 @@ public sealed class ExcelFile : ITableFile
     /// <inheritdoc />
     public string Save(IReadOnlyList<TableChanges> changes)
     {
+        using var workbook = Prepare(changes);
+        return FileReplacer.Replace(Path, _stamp, stream => workbook.SaveAs(stream));
+    }
+
+    /// <inheritdoc />
+    public string SaveCopy(IReadOnlyList<TableChanges> changes, string copyPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(copyPath);
+
+        using var workbook = Prepare(changes);
+        return FileCopyWriter.Write(Path, _stamp, copyPath, stream => workbook.SaveAs(stream));
+    }
+
+    /// <summary>
+    /// Opens the workbook as it is on disk and applies the changes in memory, after every check has passed, so a
+    /// refusal never leaves a half-changed workbook behind. Nothing is written to disk here.
+    /// </summary>
+    private XLWorkbook Prepare(IReadOnlyList<TableChanges> changes)
+    {
         ArgumentNullException.ThrowIfNull(changes);
         if (changes.Count != _sheets.Count)
         {
@@ -64,21 +83,27 @@ public sealed class ExcelFile : ITableFile
         var content = File.ReadAllBytes(Path);
         RefuseWhatTheLibraryMightDrop(name, content);
 
-        using var workbook = OpenWorkbook(name, content);
-        var sheets = _sheets.Select(sheet => workbook.Worksheet(sheet.Layout.SheetName)).ToList();
-
-        // Every check runs before any cell is set, so a refusal never leaves a half-changed workbook behind.
-        for (var i = 0; i < changes.Count; i++)
+        var workbook = OpenWorkbook(name, content);
+        try
         {
-            RefuseFormulaUpdates(name, sheets[i], _sheets[i].Layout, changes[i]);
-        }
+            var sheets = _sheets.Select(sheet => workbook.Worksheet(sheet.Layout.SheetName)).ToList();
+            for (var i = 0; i < changes.Count; i++)
+            {
+                RefuseFormulaUpdates(name, sheets[i], _sheets[i].Layout, changes[i]);
+            }
 
-        for (var i = 0; i < changes.Count; i++)
+            for (var i = 0; i < changes.Count; i++)
+            {
+                Apply(sheets[i], _sheets[i], changes[i]);
+            }
+
+            return workbook;
+        }
+        catch
         {
-            Apply(sheets[i], _sheets[i], changes[i]);
+            workbook.Dispose();
+            throw;
         }
-
-        return FileReplacer.Replace(Path, _stamp, stream => workbook.SaveAs(stream));
     }
 
     /// <summary>Sets updated cells, adds inserted rows below the table, then removes deleted rows from the bottom up.</summary>
@@ -94,7 +119,8 @@ public sealed class ExcelFile : ITableFile
 
         foreach (var update in change.Updates)
         {
-            SetValue(sheet.Cell(layout.DataRows[update.Row], layout.FirstColumn + update.Column), update.Value);
+            var cell = sheet.Cell(layout.DataRows[update.Row], layout.FirstColumn + update.Column);
+            SetValue(cell, update.Value, KindSource(sheet, layout, cell));
         }
 
         if (change.InsertedRows.Count > 0)
@@ -148,6 +174,21 @@ public sealed class ExcelFile : ITableFile
             default:
                 throw new ArgumentException($"Unexpected value type {value.GetType().Name}.", nameof(value));
         }
+    }
+
+    /// <summary>
+    /// The cell that shows what kind of value a cell's column holds: the cell itself, or when it is blank, the first
+    /// non-blank cell of its column in the table (so a date written into a blank date cell stays a date).
+    /// </summary>
+    private static IXLCell KindSource(IXLWorksheet sheet, SheetLayout layout, IXLCell cell)
+    {
+        if (!cell.IsEmpty())
+        {
+            return cell;
+        }
+
+        var column = cell.Address.ColumnNumber;
+        return layout.DataRows.Select(row => sheet.Cell(row, column)).FirstOrDefault(other => !other.IsEmpty()) ?? cell;
     }
 
     private static void RefuseFormulaUpdates(string name, IXLWorksheet sheet, SheetLayout layout, TableChanges change)

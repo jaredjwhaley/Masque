@@ -130,7 +130,7 @@ Each table shape (its set of column headers) gets a config file in the configs f
 | --- | --- |
 | `masque_describe(source)` | Lists tables, columns and each column's category. No values. Proposes a config for any new table shape. |
 | `masque_query(source, sql, maxRows, allowTypes)` | Runs one `SELECT` (or `WITH ... SELECT`) and returns the rows masked. `allowTypes` can narrow, never widen, what the policy shows raw. At most 1,000 rows. |
-| `masque_execute(source, sql)` | Runs one `INSERT`, `UPDATE` or `DELETE` on any source, if the policy lets the assistant write. CSV and Excel changes are saved to the file with a backup. Returns a row count and the files saved, never data. |
+| `masque_execute(source, sql, saveAs?)` | Runs one `INSERT`, `UPDATE` or `DELETE` on any source, if the policy lets the assistant write. CSV and Excel changes are saved to the file with a backup, or with `saveAs` to a new file beside a single source file, which is then left unchanged. Returns a row count and the files saved, never data. |
 
 Keep `masque_execute` behind your assistant's approval prompt (in Claude Code, a permission rule that asks before each call), so a person sees every write.
 
@@ -143,7 +143,7 @@ A **source** is a CSV/TSV file, an Excel workbook (each sheet is a table), a SQL
     "drops":  { "type": "file",      "path": "C:\\data\\drops" } } }
 ```
 
-CSV and Excel tables are loaded into a private in-memory SQLite database for each call, so one SQL dialect covers every file type. `masque_query` gets a read-only copy. `masque_execute` runs the write on a writable copy, works out which cells and rows changed, and saves just those changes back to each file it touched, keeping the previous version beside it as `<file>.<date-time>.masque-backup`. Saving is refused, leaving the file as it was, when the file changed on disk since it was read, is open in another program, or can't be saved safely (see the limits below).
+CSV and Excel tables are loaded into a private in-memory SQLite database for each call, so one SQL dialect covers every file type. `masque_query` gets a read-only copy. `masque_execute` runs the write on a writable copy, works out which cells and rows changed, and saves just those changes back to each file it touched, keeping the previous version beside it as `<name>.<date-time>.masque-backup.<ext>` (the data file's own extension, so tools that protect data files by extension protect backups too; folder scans skip them). With `saveAs`, the changes go to a new file in the same folder as the source instead: it must not exist yet and keeps the source's extension, the source is not touched, and no backup is made. The same-folder rule keeps the copy as protected as the source. An ISO date (`2026-11-27`) written into an Excel date column is stored as a date in that column's format. Saving is refused, leaving the file as it was, when the file changed on disk since it was read, is open in another program, or can't be saved safely (see the limits below).
 
 **Register it with Claude Code** (build first: `dotnet build src/S03_Tools/C008_Mcp -c Release`):
 

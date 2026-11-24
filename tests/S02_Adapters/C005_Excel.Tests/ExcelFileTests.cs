@@ -4,9 +4,10 @@ using Masque.Core.Tables;
 namespace Masque.Excel.Tests;
 
 /// <summary>
-/// Pins down saving changes back to an .xlsx workbook: only the changed cells are set (numbers as numbers), the
-/// rest of the workbook (formatting, formulas, other sheets) is kept, rows are found where they really are on the
-/// sheet, and anything Masque can't save safely is refused before the file is touched.
+/// Pins down saving changes back to an .xlsx workbook, or to a new copy of it: only the changed cells are set
+/// (numbers as numbers, ISO dates as dates), the rest of the workbook (formatting, formulas, other sheets) is kept,
+/// rows are found where they really are on the sheet, and anything Masque can't save safely is refused before any
+/// file is written.
 /// </summary>
 public sealed class ExcelFileTests : IDisposable
 {
@@ -46,6 +47,125 @@ public sealed class ExcelFileTests : IDisposable
         workbook.Worksheet("Notes").Cell("A2").Value = "keep me";
         workbook.SaveAs(path);
         return path;
+    }
+
+    /// <summary>
+    /// A payroll-shaped "Export" sheet (synthetic values): a bold header, PayDate as real dates shown as mm/dd/yyyy in
+    /// a widened column, the second row's PayDate left blank when <paramref name="blankDate"/> is set, and a second
+    /// "Totals" sheet.
+    /// </summary>
+    private string BuildPayroll(bool blankDate = false)
+    {
+        var path = Path.Combine(_folder, "export.xlsx");
+        using var workbook = new XLWorkbook();
+        var sheet = workbook.AddWorksheet("Export");
+        string[] headers = ["EmployeeName", "Ssn", "PayDate", "Hours", "GrossPay"];
+        for (var i = 0; i < headers.Length; i++)
+        {
+            sheet.Cell(1, i + 1).Value = headers[i];
+        }
+
+        sheet.Row(1).Style.Font.Bold = true;
+        (string Name, string Ssn, int Hours, double Pay)[] rows =
+        [
+            ("Ana Zed", "900-11-1111", 40, 1000.5),
+            ("Bo Yen", "900-22-2222", 32, 800.25),
+            ("Cy Xu", "900-33-3333", 38, 950),
+        ];
+        for (var r = 0; r < rows.Length; r++)
+        {
+            sheet.Cell(r + 2, 1).Value = rows[r].Name;
+            sheet.Cell(r + 2, 2).Value = rows[r].Ssn;
+            sheet.Cell(r + 2, 3).Value = new DateTime(2026, 11, 20);
+            sheet.Cell(r + 2, 4).Value = rows[r].Hours;
+            sheet.Cell(r + 2, 5).Value = rows[r].Pay;
+        }
+
+        sheet.Range("C2:C4").Style.NumberFormat.Format = "mm/dd/yyyy";
+        sheet.Column(3).Width = 14;
+        if (blankDate)
+        {
+            sheet.Cell("C3").Clear(XLClearOptions.Contents);
+        }
+
+        workbook.AddWorksheet("Totals").Cell("A1").Value = "Run total";
+        workbook.SaveAs(path);
+        return path;
+    }
+
+    /// <summary>One update per data row setting PayDate (column 2) to the same ISO date, as SQL text arrives.</summary>
+    private static TableChanges SetEveryPayDate(int rows, string isoDate) =>
+        Changes(updates: [.. Enumerable.Range(0, rows).Select(row => new CellChange(row, 2, isoDate))]);
+
+    /// <summary>
+    /// The weekly payroll case: every PayDate set to one date and saved as a copy. The copy holds that date as a real
+    /// date with the column's mm/dd/yyyy format; every other cell, the header style, the column width and the second
+    /// sheet are kept; the source workbook is left byte for byte as it was, with no backup made.
+    /// </summary>
+    [Fact]
+    public void SaveCopy_PayDateForEveryRow_KeepsDatesFormatAndTheRest()
+    {
+        var path = BuildPayroll();
+        var before = File.ReadAllBytes(path);
+        var file = ExcelFile.Open(path);
+
+        var copy = file.SaveCopy([SetEveryPayDate(3, "2026-11-27"), Changes()], "export-2026-11-27.xlsx");
+
+        copy.ShouldBe(Path.Combine(_folder, "export-2026-11-27.xlsx"));
+        File.ReadAllBytes(path).ShouldBe(before);
+        Directory.GetFiles(_folder).Length.ShouldBe(2);
+        using var workbook = new XLWorkbook(copy);
+        var sheet = workbook.Worksheet("Export");
+        for (var row = 2; row <= 4; row++)
+        {
+            sheet.Cell(row, 3).DataType.ShouldBe(XLDataType.DateTime);
+            sheet.Cell(row, 3).GetDateTime().ShouldBe(new DateTime(2026, 11, 27));
+            sheet.Cell(row, 3).Style.NumberFormat.Format.ShouldBe("mm/dd/yyyy");
+        }
+
+        sheet.Cell("A2").GetText().ShouldBe("Ana Zed");
+        sheet.Cell("B3").GetText().ShouldBe("900-22-2222");
+        sheet.Cell("D4").GetDouble().ShouldBe(38);
+        sheet.Cell("E2").GetDouble().ShouldBe(1000.5);
+        sheet.Cell("A1").Style.Font.Bold.ShouldBeTrue();
+        sheet.Column(3).Width.ShouldBe(14);
+        workbook.Worksheet("Totals").Cell("A1").GetText().ShouldBe("Run total");
+    }
+
+    /// <summary>
+    /// An ISO date written into a blank cell of a date column is stored as a date, taking its kind from the column's
+    /// other cells rather than from the blank cell itself.
+    /// </summary>
+    [Fact]
+    public void Save_IsoDateIntoBlankCellOfDateColumn_StoresADate()
+    {
+        var path = BuildPayroll(blankDate: true);
+        var file = ExcelFile.Open(path);
+
+        file.Save([SetEveryPayDate(3, "2026-11-27"), Changes()]);
+
+        using var workbook = new XLWorkbook(path);
+        var cell = workbook.Worksheet("Export").Cell("C3");
+        cell.DataType.ShouldBe(XLDataType.DateTime);
+        cell.GetDateTime().ShouldBe(new DateTime(2026, 11, 27));
+    }
+
+    /// <summary>The checks that guard a save also guard a copy: a formula cell is refused and no copy is written.</summary>
+    [Fact]
+    public void SaveCopy_UpdateOfAFormulaCell_IsRefusedAndWritesNothing()
+    {
+        var path = Build();
+        using (var workbook = new XLWorkbook(path))
+        {
+            workbook.Worksheet("People").Cell("D4").FormulaA1 = "5*2";
+            workbook.Save();
+        }
+
+        var file = ExcelFile.Open(path);
+
+        Should.Throw<TableFileException>(() => file.SaveCopy([Changes(updates: [new CellChange(0, 2, 7L)]), Changes()], "copy.xlsx"))
+            .Message.ShouldContain("formula");
+        File.Exists(Path.Combine(_folder, "copy.xlsx")).ShouldBeFalse();
     }
 
     /// <summary>The workbook reads as the same tables <see cref="ExcelWorkbook.ReadTables"/> gives.</summary>
@@ -109,7 +229,7 @@ public sealed class ExcelFileTests : IDisposable
 
         var backup = file.Save([Changes(deleted: [1]), Changes()]);
 
-        backup.ShouldEndWith(".masque-backup");
+        backup.ShouldEndWith(".masque-backup.xlsx");
         File.ReadAllBytes(backup).ShouldBe(before);
     }
 

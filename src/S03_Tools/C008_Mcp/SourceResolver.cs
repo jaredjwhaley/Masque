@@ -115,7 +115,8 @@ public sealed class SourceResolver(SourceCatalog catalog) : ISourceResolver
     private static OpenedSource OpenFolder(string folder, bool writable)
     {
         var tables = new List<LoadedTable>();
-        foreach (var file in Directory.EnumerateFiles(folder).Order(StringComparer.OrdinalIgnoreCase))
+        // Masque's own backups and temporary files keep their data extension, so they are skipped by name.
+        foreach (var file in Directory.EnumerateFiles(folder).Where(f => !MasqueFileNames.IsWorkFile(f)).Order(StringComparer.OrdinalIgnoreCase))
         {
             var extension = Path.GetExtension(file);
             if (CsvExtensions.Contains(extension))
