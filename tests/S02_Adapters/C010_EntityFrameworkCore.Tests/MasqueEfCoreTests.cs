@@ -268,4 +268,48 @@ public sealed class MasqueEfCoreTests
         changed.ShouldBe(1);
         harness.RawScalar("SELECT Visits FROM People WHERE Id = 1").ShouldBe(7L);
     }
+
+    /// <summary>
+    /// An entity whose key is a masked column holds a token as its key, and SaveChanges finds the row by that key
+    /// (<c>WHERE Ssn = @p</c>). Matching on a sensitive key changes nothing and copies it nowhere, so the save must
+    /// reach the real row: the token in the key must stand for its real value there, as it does in a query's filter.
+    /// </summary>
+    [Fact]
+    public void Saving_an_entity_whose_key_is_masked_updates_its_row()
+    {
+        using var harness = new EfHarness();
+        using var context = harness.Context(harness.Gate(Writer));
+        var member = context.Members.Single();
+        member.Ssn.ShouldNotBe(AliceSsn);
+
+        member.Visits = 4;
+        context.SaveChanges();
+
+        harness.RawScalar("SELECT Visits FROM Members WHERE Ssn = '900-11-1111'").ShouldBe(4L);
+        context.Entry(member).State.ShouldBe(EntityState.Unchanged);
+    }
+
+    /// <summary>
+    /// One SSN stored in two spellings gets one token with two spellings. Writing that token back into a row (here
+    /// <c>Update()</c>, which marks every property modified) must keep the spelling the row already had: picking one
+    /// spelling for every row would quietly reformat the others' stored values.
+    /// </summary>
+    [Fact]
+    public void Writing_back_a_token_with_several_spellings_keeps_the_row_spelling()
+    {
+        using var harness = new EfHarness();
+        harness.Run("INSERT INTO People VALUES (10, 'Alice Duplicate', '900111111', NULL, 1)");
+        using var context = harness.Context(harness.Gate(Writer));
+        var alice = context.People.AsNoTracking().Single(p => p.Id == 1);
+        var duplicate = context.People.AsNoTracking().Single(p => p.Id == 10);
+        duplicate.Ssn.ShouldBe(alice.Ssn);
+        duplicate.Visits = 2;
+
+        context.Update(duplicate);
+        context.SaveChanges();
+
+        harness.RawScalar("SELECT Visits FROM People WHERE Id = 10").ShouldBe(2L);
+        harness.RawScalar("SELECT Ssn FROM People WHERE Id = 10").ShouldBe("900111111");
+        harness.RawScalar("SELECT Ssn FROM People WHERE Id = 1").ShouldBe(AliceSsn);
+    }
 }

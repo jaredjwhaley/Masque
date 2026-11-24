@@ -23,12 +23,26 @@ public sealed class Person
     public long Visits { get; set; }
 }
 
+/// <summary>A member, mapped to the Members table, whose key is a masked column (an SSN).</summary>
+public sealed class Member
+{
+    public string Ssn { get; set; } = "";
+
+    public long Visits { get; set; }
+}
+
 /// <summary>A context over the test database, with Masque registered the way an application would.</summary>
 public sealed class ClinicContext(DbContextOptions<ClinicContext> options) : DbContext(options)
 {
     public DbSet<Person> People => Set<Person>();
 
-    protected override void OnModelCreating(ModelBuilder modelBuilder) => modelBuilder.Entity<Person>().ToTable("People");
+    public DbSet<Member> Members => Set<Member>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Person>().ToTable("People");
+        modelBuilder.Entity<Member>().ToTable("Members").HasKey(m => m.Ssn);
+    }
 }
 
 /// <summary>
@@ -48,6 +62,8 @@ internal sealed class EfHarness : IDisposable
 
     private static readonly string[] PeopleHeaders = ["Id", "FullName", "Ssn", "Email", "Visits"];
 
+    private static readonly string[] MembersHeaders = ["Ssn", "Visits"];
+
     public EfHarness()
     {
         Folder = Directory.CreateTempSubdirectory("masque-ef-tests-").FullName;
@@ -58,6 +74,8 @@ internal sealed class EfHarness : IDisposable
             CREATE TABLE People (Id INTEGER PRIMARY KEY, FullName TEXT, Ssn TEXT, Email TEXT, Visits INTEGER NOT NULL);
             INSERT INTO People VALUES (1, 'Alice Example', '900-11-1111', 'alice@example.test', 3);
             INSERT INTO People VALUES (2, 'Bob Sample', '900-22-2222', 'bob@example.test', 5);
+            CREATE TABLE Members (Ssn TEXT PRIMARY KEY, Visits INTEGER NOT NULL);
+            INSERT INTO Members VALUES ('900-11-1111', 3);
             """);
 
         Configs.Save(new MaskConfig(SchemaFingerprint.Compute(PeopleHeaders), ReviewedByPerson: true,
@@ -66,6 +84,12 @@ internal sealed class EfHarness : IDisposable
             new ColumnRule("FullName", SensitiveDataType.Name, "test"),
             new ColumnRule("Ssn", SensitiveDataType.Ssn, "test"),
             new ColumnRule("Email", SensitiveDataType.Email, "test"),
+            new ColumnRule("Visits", SensitiveDataType.Safe, "test"),
+        ]));
+
+        Configs.Save(new MaskConfig(SchemaFingerprint.Compute(MembersHeaders), ReviewedByPerson: true,
+        [
+            new ColumnRule("Ssn", SensitiveDataType.Ssn, "test"),
             new ColumnRule("Visits", SensitiveDataType.Safe, "test"),
         ]));
     }
